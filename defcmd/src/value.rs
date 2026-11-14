@@ -2,6 +2,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -270,6 +271,31 @@ impl FromArg for Duration {
         Some(format!("{}{name}", total / unit_ns))
     }
 }
+
+macro_rules! net_from_arg {
+    ($($t:ty => $what:literal),* $(,)?) => {$(
+        impl FromArg for $t {
+            fn from_arg(arg: &OsStr) -> Result<Self, ArgError> {
+                arg.to_str()
+                    .and_then(|s| s.parse::<$t>().ok())
+                    .ok_or_else(|| ArgError::new(concat!("expected ", $what)))
+            }
+
+            fn display_arg(&self) -> Option<String> {
+                Some(format!("'{self}'"))
+            }
+        }
+    )*};
+}
+
+net_from_arg!(
+    IpAddr => "IP address",
+    Ipv4Addr => "IPv4 address",
+    Ipv6Addr => "IPv6 address",
+    SocketAddr => "socket address, like 127.0.0.1:80",
+    SocketAddrV4 => "IPv4 socket address, like 127.0.0.1:80",
+    SocketAddrV6 => "IPv6 socket address, like [::1]:80",
+);
 
 #[cfg(test)]
 mod tests {
@@ -601,5 +627,51 @@ mod tests {
             let shown = value.display_arg().unwrap();
             assert_eq!(Duration::from_arg(os(&shown)).unwrap(), value, "{shown}");
         }
+    }
+
+    #[test]
+    fn net_types_parse_and_use_default_type_names() {
+        assert_eq!(
+            IpAddr::from_arg(os("10.0.0.1")).unwrap(),
+            IpAddr::from([10, 0, 0, 1])
+        );
+        assert!(IpAddr::from_arg(os("::1")).unwrap().is_ipv6());
+        assert_eq!(
+            Ipv4Addr::from_arg(os("1.2.3.4")).unwrap().octets(),
+            [1, 2, 3, 4]
+        );
+        assert!(Ipv6Addr::from_arg(os("fe80::1")).is_ok());
+        assert_eq!(
+            SocketAddr::from_arg(os("127.0.0.1:8080")).unwrap().port(),
+            8080
+        );
+        assert!(SocketAddr::from_arg(os("[::1]:80")).is_ok());
+        assert!(SocketAddrV4::from_arg(os("1.2.3.4:5")).is_ok());
+        assert!(SocketAddrV6::from_arg(os("[::1]:5")).is_ok());
+        assert_eq!(IpAddr::type_name(), "ipaddr");
+        assert_eq!(Ipv4Addr::type_name(), "ipv4addr");
+        assert_eq!(Ipv6Addr::type_name(), "ipv6addr");
+        assert_eq!(SocketAddr::type_name(), "socketaddr");
+        assert_eq!(SocketAddrV4::type_name(), "socketaddrv4");
+        assert_eq!(SocketAddrV6::type_name(), "socketaddrv6");
+    }
+
+    #[test]
+    fn net_types_reject_bad_values_and_quote_defaults() {
+        assert!(IpAddr::from_arg(os("1.2.3")).is_err());
+        assert!(Ipv4Addr::from_arg(os("::1")).is_err());
+        assert!(Ipv6Addr::from_arg(os("1.2.3.4")).is_err());
+        assert!(SocketAddr::from_arg(os("1.2.3.4")).is_err());
+        assert!(SocketAddrV4::from_arg(os("[::1]:5")).is_err());
+        assert!(SocketAddrV6::from_arg(os("1.2.3.4:5")).is_err());
+        assert!(IpAddr::from_arg(OsStr::from_bytes(b"1\xff")).is_err());
+        let err = SocketAddr::from_arg(os("nope")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "expected socket address, like 127.0.0.1:80"
+        );
+        let addr: SocketAddr = "127.0.0.1:80".parse().unwrap();
+        assert_eq!(addr.display_arg().as_deref(), Some("'127.0.0.1:80'"));
+        assert_eq!(Ipv6Addr::LOCALHOST.display_arg().as_deref(), Some("'::1'"));
     }
 }
