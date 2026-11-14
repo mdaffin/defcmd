@@ -1,0 +1,5 @@
+error: command path must have exactly one space between words and none at the ends
+ --> tests/ui/path_whitespace.rs:3:11
+  |
+3 | #[command("a  b")]
+  |           ^^^^^^

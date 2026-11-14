@@ -1,0 +1,5 @@
+error: command path word `-a` must not start with `-`
+ --> tests/ui/path_leading_dash.rs:3:11
+  |
+3 | #[command("-a")]
+  |           ^^^^

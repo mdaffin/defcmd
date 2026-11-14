@@ -1,0 +1,5 @@
+error: a required positional cannot follow an optional one
+ --> tests/ui/unmarked_alias_is_required.rs:7:39
+  |
+7 | fn run(first: Option<String>, second: Maybe<String>) {
+  |                                       ^^^^^^^^^^^^^

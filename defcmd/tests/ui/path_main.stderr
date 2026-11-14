@@ -1,0 +1,5 @@
+error: command path must not contain `main`: the root is implied, so `main` is not a word
+ --> tests/ui/path_main.rs:3:11
+  |
+3 | #[command("main")]
+  |           ^^^^^^

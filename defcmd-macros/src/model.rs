@@ -185,6 +185,7 @@ impl Command {
             };
             let mut flag = false;
             let mut rest = false;
+            let mut optional = false;
             let mut names = FlagNames::default();
             let mut default = None;
             let mut parse = None;
@@ -218,6 +219,17 @@ impl Command {
                         ));
                     };
                     rest = true;
+                } else if attr.path().is_ident("optional") {
+                    if optional {
+                        return Err(syn::Error::new_spanned(attr, "duplicate `#[optional]`"));
+                    }
+                    let Meta::Path(_) = &attr.meta else {
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "`#[optional]` takes no arguments",
+                        ));
+                    };
+                    optional = true;
                 } else if attr.path().is_ident("count") {
                     return Err(syn::Error::new_spanned(
                         attr,
@@ -261,6 +273,19 @@ impl Command {
                     ));
                 }
             }
+            let mut kind = classify(&pat_type.ty);
+            if optional {
+                // `type Maybe<T> = Option<T>`: the alias is not recognised syntactically, so
+                // the attribute says to treat it as `Option<T>`. It needs the `T` to convert.
+                if kind != TypeKind::Other || inner_type(&pat_type.ty).is_none() {
+                    return Err(syn::Error::new_spanned(
+                        &pat_type.ty,
+                        "`#[optional]` marks a type alias of `Option<T>` written with one type \
+                         argument, like `Maybe<String>`",
+                    ));
+                }
+                kind = TypeKind::Option;
+            }
             params.push(Param {
                 parse,
                 ident: pat.ident.clone(),
@@ -272,7 +297,7 @@ impl Command {
                 short: names.short,
                 default,
                 ty: (*pat_type.ty).clone(),
-                kind: classify(&pat_type.ty),
+                kind,
             });
         }
         Ok(Command {

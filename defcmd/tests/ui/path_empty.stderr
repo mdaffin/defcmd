@@ -1,0 +1,5 @@
+error: command path must not be empty
+ --> tests/ui/path_empty.rs:3:11
+  |
+3 | #[command("")]
+  |           ^^

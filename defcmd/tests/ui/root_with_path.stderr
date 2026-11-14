@@ -1,0 +1,5 @@
+error: the root command `main` takes no path
+ --> tests/ui/root_with_path.rs:4:4
+  |
+4 | fn main() {}
+  |    ^^^^

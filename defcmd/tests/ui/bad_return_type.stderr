@@ -1,0 +1,23 @@
+error[E0277]: the trait bound `NotOutput: defcmd::Output` is not satisfied
+ --> tests/ui/bad_return_type.rs:5:1
+  |
+5 | #[command]
+  | ^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `defcmd::Output` is not implemented for `NotOutput`
+ --> tests/ui/bad_return_type.rs:3:1
+  |
+3 | struct NotOutput;
+  | ^^^^^^^^^^^^^^^^
+help: the following other types implement trait `defcmd::Output`
+ --> src/output.rs
+  |
+  | impl Output for () {
+  | ^^^^^^^^^^^^^^^^^^ `()`
+...
+  | impl Output for ExitCode {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^ `ExitCode`
+...
+  | impl<T: Success, E: Display> Output for Result<T, E> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Result<T, E>`
+  = note: this error originates in the attribute macro `command` (in Nightly builds, run with -Z macro-backtrace for more info)
