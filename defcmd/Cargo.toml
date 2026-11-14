@@ -7,3 +7,13 @@ license = "MIT"
 [dependencies]
 defcmd-macros = { path = "../defcmd-macros" }
 inventory = "0.3"
+
+
+# `CARGO_BIN_NAME` names the program in help output, and the example's docs call it `conf`.
+[[example]]
+name = "conf"
+path = "examples/errors.rs"
+
+[lints.clippy]
+# `examples/errors.rs` is a verbatim copy of the documented example, which is not edited.
+doc_overindented_list_items = "allow"

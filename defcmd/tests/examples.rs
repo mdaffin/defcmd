@@ -134,3 +134,184 @@ Parameters:
         );
     }
 }
+
+mod errors {
+    use super::run;
+    use std::path::PathBuf;
+
+    fn conf(args: &[&str]) -> super::Run {
+        run("conf", "conf", args)
+    }
+
+    /// A config file under the temp dir, named for the test so parallel tests do not clash.
+    struct ConfigFile(PathBuf);
+
+    impl ConfigFile {
+        fn new(test: &str, text: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("defcmd-errors-{}-{test}.conf", std::process::id()));
+            std::fs::write(&path, text).unwrap();
+            ConfigFile(path)
+        }
+
+        fn arg(&self) -> &str {
+            self.0.to_str().unwrap()
+        }
+    }
+
+    impl Drop for ConfigFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    const TEXT: &str = "# comment\nport = 8080\n\nhost = example.test\n";
+
+    #[test]
+    fn root_without_arguments_prints_the_hint() {
+        let r = conf(&[]);
+        assert_eq!(
+            (r.code, r.stdout.as_str(), r.stderr.as_str()),
+            (0, "conf: try `conf --help`\n", "")
+        );
+    }
+
+    #[test]
+    fn check_counts_entries() {
+        let file = ConfigFile::new("check", TEXT);
+        let r = conf(&["check", file.arg()]);
+        assert_eq!(r.code, 0);
+        assert_eq!(r.stdout, format!("{}: 2 entries\n", file.arg()));
+        assert_eq!(r.stderr, "");
+    }
+
+    #[test]
+    fn check_of_a_missing_file_is_an_error_with_exit_1() {
+        let r = conf(&["check", "/nonexistent/missing.conf"]);
+        assert_eq!(r.code, 1);
+        assert_eq!(r.stdout, "");
+        assert!(
+            r.stderr
+                .starts_with("Error: cannot read /nonexistent/missing.conf: No such file"),
+            "{}",
+            r.stderr
+        );
+        assert!(!r.stderr.contains("help:"), "{}", r.stderr);
+    }
+
+    #[test]
+    fn get_prints_the_value() {
+        let file = ConfigFile::new("get-hit", TEXT);
+        let r = conf(&["get", file.arg(), "port"]);
+        assert_eq!(
+            (r.code, r.stdout.as_str(), r.stderr.as_str()),
+            (0, "8080\n", "")
+        );
+    }
+
+    #[test]
+    fn get_of_a_missing_key_is_an_error_with_exit_1() {
+        let file = ConfigFile::new("get-miss", TEXT);
+        let r = conf(&["get", file.arg(), "nope"]);
+        assert_eq!(r.code, 1);
+        assert_eq!(r.stdout, "");
+        assert_eq!(
+            r.stderr,
+            format!("Error: key `nope` not found in {}\n", file.arg())
+        );
+    }
+
+    #[test]
+    fn has_is_silent_and_answers_with_the_exit_code() {
+        let file = ConfigFile::new("has", TEXT);
+        let yes = conf(&["has", file.arg(), "port"]);
+        assert_eq!(
+            (yes.code, yes.stdout.as_str(), yes.stderr.as_str()),
+            (0, "", "")
+        );
+        let no = conf(&["has", file.arg(), "nope"]);
+        assert_eq!(
+            (no.code, no.stdout.as_str(), no.stderr.as_str()),
+            (1, "", "")
+        );
+    }
+
+    #[test]
+    fn has_still_reports_an_unreadable_file() {
+        let r = conf(&["has", "/nonexistent/missing.conf", "port"]);
+        assert_eq!(r.code, 1);
+        assert!(r.stderr.starts_with("Error: cannot read "), "{}", r.stderr);
+    }
+
+    #[test]
+    fn get_without_a_key_is_a_usage_error() {
+        let r = conf(&["get", "app.conf"]);
+        assert_eq!(r.code, 2);
+        assert_eq!(r.stdout, "");
+        assert_eq!(
+            r.stderr,
+            "Error: missing required argument 'key'\n  \
+             help: Usage: conf get <file> <key>. Use `conf get --help` for more information.\n"
+        );
+    }
+
+    #[test]
+    fn get_with_an_extra_argument_is_a_usage_error() {
+        let r = conf(&["get", "app.conf", "port", "extra"]);
+        assert_eq!(r.code, 2);
+        assert_eq!(r.stdout, "");
+        assert_eq!(
+            r.stderr,
+            "Error: unexpected argument 'extra'\n  \
+             help: Usage: conf get <file> <key>. Use `conf get --help` for more information.\n"
+        );
+    }
+
+    #[test]
+    fn root_help_lists_the_subcommands() {
+        let r = conf(&["--help"]);
+        assert_eq!(r.code, 0);
+        assert_eq!(r.stderr, "");
+        assert_eq!(
+            r.stdout,
+            "\
+Inspect simple `key = value` config files.
+
+Usage:
+  > conf
+
+Subcommands:
+  conf check - Check that a config file can be read.
+  conf get - Print the value of a key.
+  conf has - Exit 0 if the key is present, 1 if not. Prints nothing (like `grep -q`).
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+"
+        );
+    }
+
+    #[test]
+    fn subcommand_help_shows_path_parameters() {
+        let r = conf(&["get", "--help"]);
+        assert_eq!(r.code, 0);
+        assert_eq!(
+            r.stdout,
+            "\
+Print the value of a key.
+
+Usage:
+  > conf get <file> <key>
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+
+Parameters:
+  file <path>: Config file.
+  key <string>: Key to look up.
+"
+        );
+    }
+}
