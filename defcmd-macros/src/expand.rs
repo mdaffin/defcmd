@@ -137,16 +137,16 @@ pub fn command_name(ident: &syn::Ident) -> String {
 
 /// Expands the root command: `fn main` is renamed and the real entry point is emitted.
 pub fn expand_main(func: ItemFn) -> syn::Result<TokenStream> {
-    expand(func, true)
+    expand(func, true, None)
 }
 
-/// Expands a subcommand: the function keeps its name and signature and is registered under the
-/// name derived from it.
-pub fn expand_sub(func: ItemFn) -> syn::Result<TokenStream> {
-    expand(func, false)
+/// Expands a subcommand: the function keeps its name and signature and is registered under `path`,
+/// or under the name derived from the function name when there is none.
+pub fn expand_sub(func: ItemFn, path: Option<Vec<String>>) -> syn::Result<TokenStream> {
+    expand(func, false, path)
 }
 
-fn expand(mut func: ItemFn, root: bool) -> syn::Result<TokenStream> {
+fn expand(mut func: ItemFn, root: bool, path: Option<Vec<String>>) -> syn::Result<TokenStream> {
     let command = Command::from_fn(&func)?;
     check_supported(&command)?;
 
@@ -159,10 +159,10 @@ fn expand(mut func: ItemFn, root: bool) -> syn::Result<TokenStream> {
     } else {
         func.sig.ident.clone()
     };
-    let path: Vec<String> = if root {
-        Vec::new()
-    } else {
-        vec![command_name(&func.sig.ident)]
+    let path: Vec<String> = match path {
+        _ if root => Vec::new(),
+        Some(path) => path,
+        None => vec![command_name(&func.sig.ident)],
     };
     for arg in &mut func.sig.inputs {
         if let FnArg::Typed(t) = arg {

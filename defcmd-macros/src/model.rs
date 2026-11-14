@@ -214,6 +214,33 @@ impl Command {
     }
 }
 
+/// The words of `#[command("remote add")]`: one per level, relative to the root. Each must be
+/// non-empty, free of whitespace, must not start with `-` and must not be `main`.
+pub fn parse_path(lit: &syn::LitStr) -> syn::Result<Vec<String>> {
+    let text = lit.value();
+    let bad = |why: &str| Err(syn::Error::new(lit.span(), format!("command path {why}")));
+    if text.trim().is_empty() {
+        return bad("must not be empty");
+    }
+    // Split on single spaces so that doubled spaces show up as empty words.
+    let words: Vec<String> = text.split(' ').map(str::to_string).collect();
+    for word in &words {
+        if word.is_empty() {
+            return bad("must have exactly one space between words and none at the ends");
+        }
+        if word.chars().any(char::is_whitespace) {
+            return bad("words must be separated by single spaces only");
+        }
+        if word.starts_with('-') {
+            return bad(&format!("word `{word}` must not start with `-`"));
+        }
+        if word == "main" {
+            return bad("must not contain `main`: the root is implied, so `main` is not a word");
+        }
+    }
+    Ok(words)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,5 +498,42 @@ mod tests {
             error(parse_quote! { fn main(#[default(1)] #[default(2)] x: u8) {} }),
             "duplicate `#[default]`"
         );
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    fn path(s: &str) -> Result<Vec<String>, String> {
+        parse_path(&syn::LitStr::new(s, proc_macro2::Span::call_site())).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn words_are_split_on_spaces() {
+        assert_eq!(path("add").unwrap(), ["add"]);
+        assert_eq!(path("remote add").unwrap(), ["remote", "add"]);
+        assert_eq!(path("a-b c_d").unwrap(), ["a-b", "c_d"]);
+    }
+
+    #[test]
+    fn bad_paths_are_errors() {
+        for bad in [
+            "",
+            " ",
+            "a  b",
+            " a",
+            "a ",
+            "a\tb",
+            "a\nb",
+            "-x",
+            "a -x",
+            "main",
+            "remote main",
+        ] {
+            assert!(path(bad).is_err(), "{bad:?} should be rejected");
+        }
+        assert!(path("main").unwrap_err().contains("main"));
+        assert!(path("a -x").unwrap_err().contains("-x"));
     }
 }
