@@ -18,12 +18,45 @@ pub use parse::{Outcome, Parsed, UsageError, parse};
 pub use run::{try_run, try_run_with};
 pub use spec::{CommandSpec, ParamKind, ParamSpec, Registration};
 pub use validate::check;
-pub use value::{ArgError, FromArg};
+pub use value::{ArgError, FromArg, FromStrArg};
 
 /// Items used by generated code. Not part of the public API.
 #[doc(hidden)]
 pub mod __private {
     pub use inventory;
+
+    use crate::ArgError;
+    use std::ffi::OsStr;
+    use std::fmt::Display;
+    use std::str::FromStr;
+
+    pub use crate::value::default_type_name;
+
+    /// `#[parse(from_str)]`: parse with `FromStr`.
+    pub fn from_str_arg<T>(arg: &OsStr) -> Result<T, ArgError>
+    where
+        T: FromStr,
+        T::Err: Display,
+    {
+        <crate::FromStrArg<T> as crate::FromArg>::from_arg(arg).map(|wrapped| wrapped.0)
+    }
+
+    /// `#[parse(path::to::fn)]`: turns the error of a user function into an `ArgError`.
+    pub fn adapt<T, E: Display>(
+        f: impl Fn(&OsStr) -> Result<T, E>,
+    ) -> impl Fn(&OsStr) -> Result<T, ArgError> {
+        move |arg| f(arg).map_err(ArgError::new)
+    }
+
+    /// No fixed spellings: the `possible_values` of a parameter with `#[parse(..)]`.
+    pub fn no_values() -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The default of a parameter with `#[parse(..)]` is shown with `Display`, bare.
+    pub fn display_parsed<T: Display>(value: &T) -> Option<String> {
+        Some(value.to_string())
+    }
 
     /// The body of the generated `fn main`. `bin_name` is `option_env!("CARGO_BIN_NAME")` of the
     /// user's crate.

@@ -13,7 +13,18 @@ pub enum TypeKind {
     Other,
 }
 
+/// What `#[parse(..)]` asked for.
+#[derive(Clone)]
+pub enum ParseAttr {
+    /// `#[parse(from_str)]`: `T: FromStr`.
+    FromStr,
+    /// `#[parse(path::to::fn)]`: `fn(&OsStr) -> Result<T, E>` with `E: Display`.
+    Function(syn::Path),
+}
+
 pub struct Param {
+    /// The converter named by `#[parse(..)]`.
+    pub parse: Option<ParseAttr>,
     pub ident: Ident,
     /// The parameter name without `r#`.
     pub name: String,
@@ -172,6 +183,7 @@ impl Command {
             let mut rest = false;
             let mut names = FlagNames::default();
             let mut default = None;
+            let mut parse = None;
             for attr in &pat_type.attrs {
                 if attr.path().is_ident("doc") {
                     continue;
@@ -202,6 +214,22 @@ impl Command {
                         ));
                     };
                     rest = true;
+                } else if attr.path().is_ident("parse") {
+                    if parse.is_some() {
+                        return Err(syn::Error::new_spanned(attr, "duplicate `#[parse]`"));
+                    }
+                    let Meta::List(_) = &attr.meta else {
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "`#[parse]` needs an argument: `#[parse(from_str)]` or `#[parse(path::to::fn)]`",
+                        ));
+                    };
+                    let path: syn::Path = attr.parse_args()?;
+                    parse = Some(if path.is_ident("from_str") {
+                        ParseAttr::FromStr
+                    } else {
+                        ParseAttr::Function(path)
+                    });
                 } else if attr.path().is_ident("default") {
                     if default.is_some() {
                         return Err(syn::Error::new_spanned(attr, "duplicate `#[default]`"));
@@ -225,6 +253,7 @@ impl Command {
                 }
             }
             params.push(Param {
+                parse,
                 ident: pat.ident.clone(),
                 name: pat.ident.unraw().to_string(),
                 doc: doc_of(&pat_type.attrs),

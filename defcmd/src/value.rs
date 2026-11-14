@@ -4,6 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 /// An opaque message describing why a value could not be parsed.
@@ -43,15 +44,50 @@ pub trait FromArg: Sized {
     /// The type as shown in help (`<int>`, `<path>`). The default is the last path segment of
     /// the Rust type, lower-cased.
     fn type_name() -> String {
-        let full = std::any::type_name::<Self>();
-        // Drop generic arguments first, so `a::Vec<b::T>` gives `vec`, not `t>`.
-        let base = full.split('<').next().unwrap_or(full);
-        base.rsplit("::").next().unwrap_or(base).to_lowercase()
+        default_type_name::<Self>()
     }
 
     /// The value as shown for a default in help, or `None` to show no default.
     fn display_arg(&self) -> Option<String> {
         None
+    }
+}
+
+/// The lower-cased last path segment of `T`, or `value` for a type that is not a plain path
+/// (a tuple, a slice, a reference). This is the default `FromArg::type_name`.
+pub fn default_type_name<T>() -> String {
+    let full = std::any::type_name::<T>();
+    // Drop generic arguments first, so `a::Vec<b::T>` gives `vec`, not `t>`.
+    let base = full.split('<').next().unwrap_or(full);
+    if base.is_empty()
+        || !base
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
+    {
+        return "value".to_string();
+    }
+    base.rsplit("::").next().unwrap_or(base).to_lowercase()
+}
+
+/// Wraps any `T: FromStr` so it can be parsed as an argument: `#[parse(from_str)]` uses it for
+/// you. The error of `T::from_str` becomes the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FromStrArg<T>(pub T);
+
+impl<T> FromArg for FromStrArg<T>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    fn from_arg(arg: &OsStr) -> Result<Self, ArgError> {
+        let text = arg
+            .to_str()
+            .ok_or_else(|| ArgError::new("not valid UTF-8"))?;
+        text.parse::<T>().map(FromStrArg).map_err(ArgError::new)
+    }
+
+    fn type_name() -> String {
+        default_type_name::<T>()
     }
 }
 
@@ -673,5 +709,27 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:80".parse().unwrap();
         assert_eq!(addr.display_arg().as_deref(), Some("'127.0.0.1:80'"));
         assert_eq!(Ipv6Addr::LOCALHOST.display_arg().as_deref(), Some("'::1'"));
+    }
+
+    #[test]
+    fn from_str_arg_wraps_any_from_str_type() {
+        use std::num::NonZeroU32;
+        let ok = FromStrArg::<NonZeroU32>::from_arg(os("5")).unwrap();
+        assert_eq!(ok.0.get(), 5);
+        let err = FromStrArg::<NonZeroU32>::from_arg(os("0")).unwrap_err();
+        assert_eq!(err.to_string(), "number would be zero for non-zero type");
+        let err = FromStrArg::<u8>::from_arg(OsStr::from_bytes(b"\xff")).unwrap_err();
+        assert_eq!(err.to_string(), "not valid UTF-8");
+        assert_eq!(FromStrArg::<NonZeroU32>::type_name(), "nonzero");
+        assert_eq!(FromStrArg::<std::net::IpAddr>::type_name(), "ipaddr");
+        assert_eq!(FromStrArg(1u8).display_arg(), None);
+    }
+
+    #[test]
+    fn default_type_name_copes_with_types_that_are_not_paths() {
+        assert_eq!(default_type_name::<(String, String)>(), "value");
+        assert_eq!(default_type_name::<[u8; 2]>(), "value");
+        assert_eq!(default_type_name::<std::num::NonZeroU32>(), "nonzero");
+        assert_eq!(default_type_name::<Vec<u8>>(), "vec");
     }
 }

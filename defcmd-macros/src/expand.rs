@@ -5,13 +5,19 @@ use quote::{format_ident, quote};
 use syn::ext::IdentExt;
 use syn::{Expr, ExprLit, FnArg, ItemFn, Lit, Type};
 
-use crate::model::{Command, CommandAttr, Param, TypeKind, classify, inner_type};
+use crate::model::{Command, CommandAttr, Param, ParseAttr, TypeKind, classify, inner_type};
 
 /// Rejects parameter combinations that are not supported, so nothing is silently miscompiled.
 fn check_supported(command: &Command) -> syn::Result<()> {
     let mut seen_optional = false;
     let mut seen_rest = false;
     for p in &command.params {
+        if p.parse.is_some() && p.flag && (p.kind == TypeKind::Bool || is_tri_state(p)) {
+            return Err(syn::Error::new_spanned(
+                &p.ty,
+                "`#[parse]` cannot be used on a switch",
+            ));
+        }
         if p.rest && (p.flag || p.default.is_some()) {
             return Err(syn::Error::new_spanned(
                 &p.ty,
@@ -129,14 +135,29 @@ fn default_fns(index: usize, p: &Param) -> Option<TokenStream> {
     let make = default_fn(index);
     let display = default_display_fn(index);
     let value = default_value(expr, ty);
+    let shown = if p.parse.is_some() {
+        quote!(::defcmd::__private::display_parsed(&#make()))
+    } else {
+        quote!(::defcmd::FromArg::display_arg(&#make()))
+    };
     Some(quote! {
         fn #make() -> #ty {
             #value
         }
         fn #display() -> ::core::option::Option<::std::string::String> {
-            ::defcmd::FromArg::display_arg(&#make())
+            #shown
         }
     })
+}
+
+/// The function that converts a raw value to `T` (the value type), when `#[parse(..)]` replaces
+/// `FromArg`.
+fn converter(p: &Param) -> Option<TokenStream> {
+    let ty = value_type(p);
+    match p.parse.as_ref()? {
+        ParseAttr::FromStr => Some(quote!(::defcmd::__private::from_str_arg::<#ty>)),
+        ParseAttr::Function(path) => Some(quote!(::defcmd::__private::adapt(#path))),
+    }
 }
 
 /// The `ParamSpec` expression for one parameter.
@@ -172,6 +193,17 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
     } else {
         quote!(::core::option::Option::None)
     };
+    let (type_name, possible_values) = if p.parse.is_some() {
+        (
+            quote!(::defcmd::__private::default_type_name::<#ty>),
+            quote!(::defcmd::__private::no_values),
+        )
+    } else {
+        (
+            quote!(<#ty as ::defcmd::FromArg>::type_name),
+            quote!(<#ty as ::defcmd::FromArg>::possible_values),
+        )
+    };
     quote! {
         ::defcmd::ParamSpec {
             name: #name,
@@ -179,8 +211,8 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
             long: #long,
             short: #short,
             doc: #doc,
-            type_name: <#ty as ::defcmd::FromArg>::type_name,
-            possible_values: <#ty as ::defcmd::FromArg>::possible_values,
+            type_name: #type_name,
+            possible_values: #possible_values,
             default_display: #default_display,
             optional: #optional,
             rest: #rest,
@@ -194,19 +226,33 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
 fn convert(index: usize, p: &Param) -> TokenStream {
     let ident = &p.ident;
     let ty = &p.ty;
+    let inner = value_type(p);
+    let conv = converter(p);
+    // The getter call, `get_opt::<T>` or `get_opt_with(.., converter)`.
+    let getter = |name: &str| {
+        let plain = format_ident!("{name}");
+        let with = format_ident!("{name}_with");
+        match &conv {
+            Some(conv) => quote!(__parsed.#with(#index, #conv)),
+            None => quote!(__parsed.#plain::<#inner>(#index)),
+        }
+    };
     if is_rest(p) || (p.flag && p.kind == TypeKind::Vec) {
-        let inner = value_type(p);
-        quote!(let #ident: #ty = __parsed.get_all::<#inner>(#index)?;)
+        let get = getter("get_all");
+        quote!(let #ident: #ty = #get?;)
     } else if p.kind == TypeKind::Option {
-        let inner = value_type(p);
-        quote!(let #ident: #ty = __parsed.get_opt::<#inner>(#index)?;)
+        let get = getter("get_opt");
+        quote!(let #ident: #ty = #get?;)
     } else if p.default.is_some() {
         let make = default_fn(index);
-        quote!(let #ident: #ty = __parsed.get_opt::<#ty>(#index)?.unwrap_or_else(#make);)
+        let get = getter("get_opt");
+        quote!(let #ident: #ty = #get?.unwrap_or_else(#make);)
     } else if p.flag {
-        quote!(let #ident: #ty = __parsed.get_opt::<#ty>(#index)?.unwrap_or_default();)
+        let get = getter("get_opt");
+        quote!(let #ident: #ty = #get?.unwrap_or_default();)
     } else {
-        quote!(let #ident: #ty = __parsed.get::<#ty>(#index)?;)
+        let get = getter("get");
+        quote!(let #ident: #ty = #get?;)
     }
 }
 
@@ -415,6 +461,21 @@ mod tests {
             rejected(f),
             "`#[default]` cannot be combined with a `Vec` flag"
         );
+    }
+
+    #[test]
+    fn parse_attribute_is_supported_but_not_on_switches() {
+        let f: ItemFn = parse_quote! {
+            fn main(
+                #[parse(from_str)] a: u8,
+                #[flag] #[parse(crate::h)] b: Option<u8>,
+            ) {}
+        };
+        assert!(check_supported(&Command::from_fn(&f).unwrap()).is_ok());
+        let f: ItemFn = parse_quote! { fn main(#[flag] #[parse(from_str)] a: bool) {} };
+        assert_eq!(rejected(f), "`#[parse]` cannot be used on a switch");
+        let f: ItemFn = parse_quote! { fn main(#[flag] #[parse(from_str)] a: Option<bool>) {} };
+        assert_eq!(rejected(f), "`#[parse]` cannot be used on a switch");
     }
 
     #[test]

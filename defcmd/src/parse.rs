@@ -8,7 +8,7 @@ use std::fmt;
 use std::os::unix::ffi::OsStrExt;
 
 use crate::spec::{CommandSpec, ParamKind};
-use crate::value::FromArg;
+use crate::value::{ArgError, FromArg};
 
 /// A problem with the arguments the user gave.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,26 +291,52 @@ impl Parsed {
     /// The converted value of parameter `index`, or `None` if it was not given. If it was given
     /// more than once, the last value is used.
     pub fn get_opt<T: FromArg>(&self, index: usize) -> Result<Option<T>, UsageError> {
+        self.get_opt_with(index, T::from_arg)
+    }
+
+    /// Like [`Parsed::get_opt`], converting with `parse` instead of `FromArg` (`#[parse(..)]`).
+    pub fn get_opt_with<T>(
+        &self,
+        index: usize,
+        parse: impl Fn(&OsStr) -> Result<T, ArgError>,
+    ) -> Result<Option<T>, UsageError> {
         let Raw::Values(values) = &self.raw[index] else {
             return Ok(None);
         };
         let Some(value) = values.last() else {
             return Ok(None);
         };
-        self.convert(index, value).map(Some)
+        self.convert(index, value, parse).map(Some)
     }
 
     /// Every value of parameter `index`, converted, in the order given; empty if there were none.
     /// For the rest positional.
     pub fn get_all<T: FromArg>(&self, index: usize) -> Result<Vec<T>, UsageError> {
+        self.get_all_with(index, T::from_arg)
+    }
+
+    /// Like [`Parsed::get_all`], converting with `parse` instead of `FromArg`.
+    pub fn get_all_with<T>(
+        &self,
+        index: usize,
+        parse: impl Fn(&OsStr) -> Result<T, ArgError>,
+    ) -> Result<Vec<T>, UsageError> {
         let Raw::Values(values) = &self.raw[index] else {
             return Ok(Vec::new());
         };
-        values.iter().map(|v| self.convert(index, v)).collect()
+        values
+            .iter()
+            .map(|v| self.convert(index, v, &parse))
+            .collect()
     }
 
-    fn convert<T: FromArg>(&self, index: usize, value: &OsStr) -> Result<T, UsageError> {
-        T::from_arg(value).map_err(|e| {
+    fn convert<T>(
+        &self,
+        index: usize,
+        value: &OsStr,
+        parse: impl Fn(&OsStr) -> Result<T, ArgError>,
+    ) -> Result<T, UsageError> {
+        parse(value).map_err(|e| {
             let name = self.spec.params[index].display_name();
             // A value that is not UTF-8 cannot be quoted back faithfully, so it is left out.
             match value.to_str() {
@@ -322,7 +348,16 @@ impl Parsed {
 
     /// Like [`Parsed::get_opt`], but a missing value is a usage error.
     pub fn get<T: FromArg>(&self, index: usize) -> Result<T, UsageError> {
-        self.get_opt(index)?.ok_or_else(|| {
+        self.get_with(index, T::from_arg)
+    }
+
+    /// Like [`Parsed::get`], converting with `parse` instead of `FromArg`.
+    pub fn get_with<T>(
+        &self,
+        index: usize,
+        parse: impl Fn(&OsStr) -> Result<T, ArgError>,
+    ) -> Result<T, UsageError> {
+        self.get_opt_with(index, parse)?.ok_or_else(|| {
             UsageError::new(format!(
                 "missing required argument '{}'",
                 self.spec.params[index].name
