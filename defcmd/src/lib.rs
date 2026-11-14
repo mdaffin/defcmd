@@ -3,6 +3,12 @@ extern crate self as defcmd;
 
 pub use defcmd_macros::command;
 
+/// Items used by generated code. Not part of the public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use inventory;
+}
+
 #[cfg(test)]
 mod tests {
     use crate::command;

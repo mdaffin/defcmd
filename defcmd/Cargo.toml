@@ -6,3 +6,4 @@ license = "MIT"
 
 [dependencies]
 defcmd-macros = { path = "../defcmd-macros" }
+inventory = "0.3"
