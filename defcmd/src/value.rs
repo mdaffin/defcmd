@@ -2,6 +2,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::path::PathBuf;
 
 /// An opaque message describing why a value could not be parsed.
 ///
@@ -66,6 +67,20 @@ impl FromArg for OsString {
     }
 }
 
+impl FromArg for PathBuf {
+    fn from_arg(arg: &OsStr) -> Result<Self, ArgError> {
+        Ok(PathBuf::from(arg))
+    }
+
+    fn type_name() -> String {
+        "path".to_string()
+    }
+
+    fn display_arg(&self) -> Option<String> {
+        Some(format!("'{}'", self.display()))
+    }
+}
+
 impl FromArg for bool {
     fn from_arg(arg: &OsStr) -> Result<Self, ArgError> {
         match arg.to_str() {
@@ -107,6 +122,23 @@ mod tests {
     fn os_string_accepts_anything() {
         let raw = OsStr::from_bytes(b"a\xffb");
         assert_eq!(OsString::from_arg(raw).unwrap(), raw);
+    }
+
+    #[test]
+    fn path_buf_accepts_anything_and_is_called_path() {
+        let raw = OsStr::from_bytes(b"a/\xff");
+        assert_eq!(PathBuf::from_arg(raw).unwrap(), PathBuf::from(raw));
+        assert_eq!(PathBuf::from_arg(os("")).unwrap(), PathBuf::new());
+        assert_eq!(PathBuf::type_name(), "path");
+        assert!(PathBuf::possible_values().is_empty());
+    }
+
+    #[test]
+    fn path_buf_default_is_shown_single_quoted() {
+        assert_eq!(
+            PathBuf::from("a b/c").display_arg().as_deref(),
+            Some("'a b/c'")
+        );
     }
 
     #[test]
