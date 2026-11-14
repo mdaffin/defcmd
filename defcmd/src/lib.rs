@@ -8,6 +8,7 @@ mod run;
 mod spec;
 #[cfg(test)]
 mod test_util;
+mod tree;
 mod value;
 
 pub use defcmd_macros::command;

@@ -7,7 +7,8 @@ use std::process::ExitCode;
 
 use crate::help::{render_help, render_usage_error, render_version};
 use crate::parse::{Outcome, parse};
-use crate::spec::Registration;
+use crate::spec::{CommandSpec, Registration};
+use crate::tree::Node;
 
 /// Writes `text` and flushes. A closed pipe (`| head`) is not an error for defcmd's own output.
 fn emit(w: &mut dyn Write, text: &str) {
@@ -23,7 +24,13 @@ fn program_name(argv0: Option<&OsString>) -> String {
         .unwrap_or_else(|| "main".to_string())
 }
 
-/// Runs the root among `registrations` with `args` (the first item is the program name).
+fn usage_error(err: &mut dyn Write, spec: &CommandSpec, program: &str, message: &str) -> ExitCode {
+    emit(err, &render_usage_error(spec, program, message));
+    ExitCode::from(2)
+}
+
+/// Runs the command that `args` select among `registrations`: the root, or the subcommand named
+/// by the leading words. The first item of `args` is the program name.
 pub(crate) fn run_registrations(
     registrations: &[&Registration],
     args: &[OsString],
@@ -31,35 +38,39 @@ pub(crate) fn run_registrations(
     err: &mut dyn Write,
 ) -> ExitCode {
     let program = program_name(args.first());
-    let Some(root) = registrations.iter().find(|r| r.spec.path.is_empty()) else {
+    let Some(tree) = Node::build(registrations) else {
         emit(err, "Error: no root command is registered\n");
         return ExitCode::from(1);
     };
-    let spec = root.spec;
-    let usage_error = |err: &mut dyn Write, message: &str| {
-        emit(err, &render_usage_error(spec, &program, message));
-        ExitCode::from(2)
-    };
 
-    // Subcommands (M5) are not looked up yet: no word names a child.
-    match parse(spec, args.get(1..).unwrap_or_default(), &|_| None) {
-        Ok(Outcome::Help) => {
-            emit(out, &render_help(spec, &program));
-            ExitCode::SUCCESS
+    let mut node = &tree;
+    let mut rest: Vec<OsString> = args.get(1..).unwrap_or_default().to_vec();
+    loop {
+        let spec = node.reg.spec;
+        match parse(spec, &rest, &|word| node.child_index(word)) {
+            Ok(Outcome::Help) => {
+                emit(out, &render_help(spec, &program));
+                return ExitCode::SUCCESS;
+            }
+            Ok(Outcome::Version) => {
+                emit(
+                    out,
+                    &render_version(&program, spec.version.unwrap_or_default()),
+                );
+                return ExitCode::SUCCESS;
+            }
+            Ok(Outcome::Run(parsed)) => {
+                return match (node.reg.run)(&parsed, err) {
+                    Ok(code) => code,
+                    Err(e) => usage_error(err, spec, &program, &e.to_string()),
+                };
+            }
+            Ok(Outcome::Sub { index, rest: after }) => {
+                node = &node.children[index];
+                rest = after;
+            }
+            Err(e) => return usage_error(err, spec, &program, &e.to_string()),
         }
-        Ok(Outcome::Version) => {
-            emit(
-                out,
-                &render_version(&program, spec.version.unwrap_or_default()),
-            );
-            ExitCode::SUCCESS
-        }
-        Ok(Outcome::Run(parsed)) => match (root.run)(&parsed, err) {
-            Ok(code) => code,
-            Err(e) => usage_error(err, &e.to_string()),
-        },
-        Ok(Outcome::Sub { .. }) => usage_error(err, "unexpected argument"),
-        Err(e) => usage_error(err, &e.to_string()),
     }
 }
 
@@ -286,5 +297,210 @@ mod tests {
             args(&["target/debug/x", "a"])
         );
         assert_eq!(apply_bin_name(args(&[]), Some("tool")), args(&["tool"]));
+    }
+}
+
+/// Dispatch through a hand-built tree shaped like the `errors.rs` example.
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+    use crate::parse::{Parsed, UsageError};
+    use crate::spec::ParamSpec;
+    use crate::test_util::{positional, switch};
+    use std::sync::Mutex;
+
+    /// Which glue ran, with the first positional it saw.
+    static RAN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn record(label: &str, parsed: &Parsed) -> Result<ExitCode, UsageError> {
+        let first = if parsed.spec.params.is_empty() {
+            String::new()
+        } else {
+            parsed
+                .get_opt::<String>(0)
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        };
+        RAN.lock().unwrap().push(format!("{label}:{first}"));
+        Ok(ExitCode::SUCCESS)
+    }
+    fn ran(label: &str) -> bool {
+        RAN.lock().unwrap().iter().any(|r| r == label)
+    }
+
+    fn glue_root(p: &Parsed, _: &mut dyn Write) -> Result<ExitCode, UsageError> {
+        record("root", p)
+    }
+    fn glue_get(p: &Parsed, _: &mut dyn Write) -> Result<ExitCode, UsageError> {
+        record("get", p)
+    }
+    fn glue_has(p: &Parsed, _: &mut dyn Write) -> Result<ExitCode, UsageError> {
+        record("has", p)
+    }
+
+    static FILE_KEY: [ParamSpec; 2] = [positional("file"), positional("key")];
+    static ROOT: CommandSpec = CommandSpec {
+        path: &[],
+        aliases: &[],
+        doc: "Inspect config files.",
+        params: &[],
+        version: Some("1.0.0"),
+    };
+    static GET: CommandSpec = CommandSpec {
+        path: &["get"],
+        aliases: &[],
+        doc: "Print a key.",
+        params: &FILE_KEY,
+        version: None,
+    };
+    static HAS: CommandSpec = CommandSpec {
+        path: &["has"],
+        aliases: &[],
+        doc: "",
+        params: &FILE_KEY,
+        version: None,
+    };
+    static R_ROOT: Registration = Registration {
+        spec: &ROOT,
+        run: glue_root,
+    };
+    static R_GET: Registration = Registration {
+        spec: &GET,
+        run: glue_get,
+    };
+    static R_HAS: Registration = Registration {
+        spec: &HAS,
+        run: glue_has,
+    };
+
+    // A root that takes a positional itself, next to one child.
+    static NAME_PARAMS: [ParamSpec; 2] = [positional("name"), switch("loud", "loud")];
+    static GREET: CommandSpec = CommandSpec {
+        path: &[],
+        aliases: &[],
+        doc: "",
+        params: &NAME_PARAMS,
+        version: None,
+    };
+    static LIST: CommandSpec = CommandSpec {
+        path: &["list"],
+        aliases: &[],
+        doc: "",
+        params: &[],
+        version: None,
+    };
+    static R_GREET: Registration = Registration {
+        spec: &GREET,
+        run: glue_root,
+    };
+    static R_LIST: Registration = Registration {
+        spec: &LIST,
+        run: glue_get,
+    };
+
+    fn run(regs: &[&Registration], args: &[&str]) -> (ExitCode, String, String) {
+        let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_registrations(regs, &args, &mut out, &mut err);
+        (
+            code,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
+    }
+
+    fn conf(args: &[&str]) -> (ExitCode, String, String) {
+        run(&[&R_HAS, &R_ROOT, &R_GET], args)
+    }
+
+    #[test]
+    fn a_subcommand_word_runs_that_command_with_the_rest() {
+        let (code, out, err) = conf(&["conf", "get", "app.conf", "port"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!((out.as_str(), err.as_str()), ("", ""));
+        assert!(ran("get:app.conf"));
+        let (code, ..) = conf(&["conf", "has", "other.conf", "port"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(ran("has:other.conf"));
+    }
+
+    #[test]
+    fn no_words_run_the_root() {
+        let (code, ..) = conf(&["conf"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(ran("root:"));
+    }
+
+    #[test]
+    fn an_unknown_word_without_a_positional_is_unexpected() {
+        let (code, out, err) = conf(&["conf", "nosuch"]);
+        assert_eq!(code, ExitCode::from(2));
+        assert_eq!(out, "");
+        assert_eq!(
+            err,
+            "Error: unexpected argument 'nosuch'\n  \
+             help: Usage: conf. Use `conf --help` for more information.\n"
+        );
+    }
+
+    #[test]
+    fn a_word_that_is_no_child_goes_to_the_roots_positional() {
+        let regs: &[&Registration] = &[&R_GREET, &R_LIST];
+        let (code, ..) = run(regs, &["hi", "Ada"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(ran("root:Ada"));
+        // A flag before the word does not stop it naming a child.
+        let (code, ..) = run(regs, &["hi", "--loud", "list"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(ran("get:"));
+    }
+
+    #[test]
+    fn usage_errors_name_the_subcommand() {
+        let (code, out, err) = conf(&["conf", "get", "app.conf"]);
+        assert_eq!(code, ExitCode::from(2));
+        assert_eq!(out, "");
+        assert_eq!(
+            err,
+            "Error: missing required argument 'key'\n  \
+             help: Usage: conf get <file> <key>. Use `conf get --help` for more information.\n"
+        );
+        let (_, _, err) = conf(&["conf", "get", "a", "b", "extra"]);
+        assert_eq!(
+            err,
+            "Error: unexpected argument 'extra'\n  \
+             help: Usage: conf get <file> <key>. Use `conf get --help` for more information.\n"
+        );
+    }
+
+    #[test]
+    fn help_is_for_the_level_it_is_given_at() {
+        let (code, out, err) = conf(&["conf", "--help"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(
+            out.starts_with("Inspect config files.\n\nUsage:\n  > conf\n"),
+            "{out}"
+        );
+        assert_eq!(err, "");
+        let (code, out, _) = conf(&["conf", "get", "--help"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(
+            out.starts_with("Print a key.\n\nUsage:\n  > conf get <file> <key>\n"),
+            "{out}"
+        );
+        // `-h` after other arguments still wins over the missing ones.
+        let (code, out, _) = conf(&["conf", "get", "app.conf", "-h"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(out.contains("> conf get <file> <key>"));
+    }
+
+    #[test]
+    fn version_belongs_to_the_command_that_has_one() {
+        let (code, out, _) = conf(&["conf", "--version"]);
+        assert_eq!((code, out.as_str()), (ExitCode::SUCCESS, "conf 1.0.0\n"));
+        let (code, _, err) = conf(&["conf", "get", "--version"]);
+        assert_eq!(code, ExitCode::from(2));
+        assert!(err.starts_with("Error: unknown flag '--version'"), "{err}");
     }
 }
