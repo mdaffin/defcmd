@@ -43,8 +43,8 @@ pub struct CommandSpec {
     pub aliases: &'static [&'static str],
     pub doc: &'static str,
     pub params: &'static [ParamSpec],
-    /// Whether `--version` / `-V` is generated for this command.
-    pub version: bool,
+    /// The crate version, if `--version` / `-V` is generated for this command.
+    pub version: Option<&'static str>,
 }
 
 #[cfg(test)]
@@ -78,7 +78,7 @@ mod tests {
         aliases: &["cp"],
         doc: "Copy a file.",
         params: &PARAMS,
-        version: false,
+        version: None,
     };
 
     #[test]

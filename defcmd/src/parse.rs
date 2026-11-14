@@ -116,7 +116,7 @@ pub fn parse(
                 if value.is_none() && name == "help" {
                     return Ok(Outcome::Help);
                 }
-                if value.is_none() && name == "version" && spec.version {
+                if value.is_none() && name == "version" && spec.version.is_some() {
                     return Ok(Outcome::Version);
                 }
                 let found = spec
@@ -146,7 +146,7 @@ pub fn parse(
                 }
             } else if text == "-h" {
                 return Ok(Outcome::Help);
-            } else if text == "-V" && spec.version {
+            } else if text == "-V" && spec.version.is_some() {
                 return Ok(Outcome::Version);
             } else {
                 pending.get_or_insert_with(|| UsageError::new(format!("unknown flag '{text}'")));
@@ -238,14 +238,14 @@ mod tests {
         aliases: &[],
         doc: "",
         params: &PARAMS,
-        version: true,
+        version: Some("1.2.3"),
     };
     static NO_VERSION: CommandSpec = CommandSpec {
         path: &["copy"],
         aliases: &[],
         doc: "",
         params: &PARAMS,
-        version: false,
+        version: None,
     };
 
     fn args(a: &[&str]) -> Vec<OsString> {
