@@ -83,12 +83,15 @@ impl<'a> Node<'a> {
         }
     }
 
-    /// Every command below this one, parents before their children, siblings sorted by name:
-    /// sorted by path.
+    /// Every command below this one that has a body or a doc (so not an implicit group), parents
+    /// before their children, siblings sorted by name: sorted by path. Implicit groups are not
+    /// listed themselves, but their children are.
     pub fn descendants(&self) -> Vec<&'static CommandSpec> {
         let mut all = Vec::new();
         for child in &self.children {
-            all.push(child.spec);
+            if child.reg.is_some() {
+                all.push(child.spec);
+            }
             all.extend(child.descendants());
         }
         all
@@ -193,14 +196,14 @@ mod tests {
     }
 
     #[test]
-    fn groups_nest_and_appear_in_descendants() {
+    fn groups_nest_but_are_not_listed_in_descendants() {
         let tree = Node::build(&[&R_ROOT, &R_FAR]).unwrap();
         let paths: Vec<_> = tree
             .descendants()
             .iter()
             .map(|s| s.path.join(" "))
             .collect();
-        assert_eq!(paths, ["a", "a b", "a b c"]);
+        assert_eq!(paths, ["a b c"]);
     }
 
     #[test]

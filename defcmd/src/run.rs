@@ -311,7 +311,7 @@ mod dispatch_tests {
     use super::*;
     use crate::parse::{Parsed, UsageError};
     use crate::spec::ParamSpec;
-    use crate::test_util::{flag, positional, switch};
+    use crate::test_util::{documented, flag, positional, switch, with_short};
     use std::sync::Mutex;
 
     /// Which glue ran, with the first positional it saw.
@@ -567,10 +567,10 @@ Flags:
     }
 
     #[test]
-    fn the_root_lists_group_children_flattened() {
+    fn the_root_lists_group_children_flattened_without_the_group() {
         let (_, out, _) = grouped(&["conf", "--help"]);
         assert!(
-            out.contains("Subcommands:\n  conf remote\n  conf remote add - Add a remote.\n"),
+            out.contains("Subcommands:\n  conf remote add - Add a remote.\n"),
             "{out}"
         );
     }
@@ -680,5 +680,140 @@ Flags:
     fn the_root_body_runs_only_when_no_subcommand_is_chosen() {
         let (code, _, err) = todo(&["todo", "--verbose"]);
         assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, "ran todo"));
+    }
+
+    // The tree of `examples/nushell_style.rs`, built by hand, for its golden help texts.
+    fn priority_default() -> Option<String> {
+        crate::value::FromArg::display_arg(&1u8)
+    }
+    static VERBOSE_PARAMS: [ParamSpec; 1] = [with_short(
+        documented(switch("verbose", "verbose"), "Print extra detail."),
+        'v',
+    )];
+    static ADD_PARAMS: [ParamSpec; 2] = [
+        documented(positional("title"), "What needs doing."),
+        ParamSpec {
+            type_name: <u8 as crate::value::FromArg>::type_name,
+            possible_values: <u8 as crate::value::FromArg>::possible_values,
+            default_display: Some(priority_default),
+            ..with_short(
+                documented(flag("priority", "priority"), "1 (low) to 3 (high)."),
+                'p',
+            )
+        },
+    ];
+    const fn command(
+        path: &'static [&'static str],
+        doc: &'static str,
+        params: &'static [ParamSpec],
+    ) -> CommandSpec {
+        CommandSpec {
+            path,
+            aliases: &[],
+            doc,
+            params,
+            version: Some("1.0.0"),
+        }
+    }
+    static NS_MAIN: CommandSpec = command(&[], "A tiny todo list.", &VERBOSE_PARAMS);
+    static NS_ADD: CommandSpec = command(&["add"], "Add an item.", &ADD_PARAMS);
+    static NS_LIST: CommandSpec = command(&["list"], "List items.", &[]);
+    static NS_REMOTE_ADD: CommandSpec = command(&["remote", "add"], "Add a remote list.", &[]);
+    static NS_REMOTE_REMOVE: CommandSpec =
+        command(&["remote", "remove"], "Remove a remote list.", &[]);
+    static R_NS: [Registration; 5] = [
+        Registration {
+            spec: &NS_REMOTE_REMOVE,
+            run: glue_todo_list,
+        },
+        Registration {
+            spec: &NS_LIST,
+            run: glue_todo_list,
+        },
+        Registration {
+            spec: &NS_MAIN,
+            run: glue_todo,
+        },
+        Registration {
+            spec: &NS_REMOTE_ADD,
+            run: glue_todo_list,
+        },
+        Registration {
+            spec: &NS_ADD,
+            run: glue_todo_list,
+        },
+    ];
+
+    fn nushell(args: &[&str]) -> (ExitCode, String, String) {
+        let regs: Vec<&Registration> = R_NS.iter().collect();
+        run(&regs, args)
+    }
+
+    #[test]
+    fn golden_root_help_lists_every_descendant_flattened_and_sorted() {
+        let expected = "\
+A tiny todo list.
+
+Usage:
+  > todo {flags}
+
+Subcommands:
+  todo add - Add an item.
+  todo list - List items.
+  todo remote add - Add a remote list.
+  todo remote remove - Remove a remote list.
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+  -v, --verbose: Print extra detail.
+";
+        let (code, out, err) = nushell(&["todo", "--help"]);
+        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, ""));
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn golden_subcommand_help_has_the_full_path_in_usage() {
+        let expected = "\
+Add an item.
+
+Usage:
+  > todo add {flags} <title>
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+  -p, --priority <int>: 1 (low) to 3 (high). (default: 1)
+
+Parameters:
+  title <string>: What needs doing.
+";
+        let (code, out, err) = nushell(&["todo", "add", "--help"]);
+        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, ""));
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn golden_group_help_starts_at_usage_and_lists_its_own_descendants() {
+        let expected = "\
+Usage:
+  > todo remote
+
+Subcommands:
+  todo remote add - Add a remote list.
+  todo remote remove - Remove a remote list.
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+";
+        let (code, out, err) = nushell(&["todo", "remote", "--help"]);
+        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, ""));
+        assert_eq!(out, expected);
+        // Without `--help` the same text is printed, with exit 2 and no error line.
+        let (code, out, err) = nushell(&["todo", "remote"]);
+        assert_eq!((code, err.as_str()), (ExitCode::from(2), ""));
+        assert_eq!(out, expected);
     }
 }
