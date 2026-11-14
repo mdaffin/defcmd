@@ -59,11 +59,19 @@ impl FromArg for String {
             .map(str::to_owned)
             .ok_or_else(|| ArgError::new("not valid UTF-8"))
     }
+
+    fn display_arg(&self) -> Option<String> {
+        Some(format!("'{self}'"))
+    }
 }
 
 impl FromArg for OsString {
     fn from_arg(arg: &OsStr) -> Result<Self, ArgError> {
         Ok(arg.to_owned())
+    }
+
+    fn display_arg(&self) -> Option<String> {
+        Some(format!("'{}'", self.to_string_lossy()))
     }
 }
 
@@ -88,6 +96,10 @@ impl FromArg for bool {
             Some("false") => Ok(false),
             _ => Err(ArgError::new("expected bool")),
         }
+    }
+
+    fn display_arg(&self) -> Option<String> {
+        Some(self.to_string())
     }
 }
 
@@ -251,6 +263,14 @@ mod tests {
         assert_eq!(PathBuf::from_arg(os("")).unwrap(), PathBuf::new());
         assert_eq!(PathBuf::type_name(), "path");
         assert!(PathBuf::possible_values().is_empty());
+    }
+
+    #[test]
+    fn string_os_string_and_bool_defaults_are_shown_like_nushell() {
+        assert_eq!("a b".to_string().display_arg().as_deref(), Some("'a b'"));
+        assert_eq!(OsString::from("x").display_arg().as_deref(), Some("'x'"));
+        assert_eq!(true.display_arg().as_deref(), Some("true"));
+        assert_eq!(false.display_arg().as_deref(), Some("false"));
     }
 
     #[test]
