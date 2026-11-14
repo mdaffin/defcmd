@@ -26,3 +26,8 @@ pub const fn switch(name: &'static str, long: &'static str) -> ParamSpec {
         default_display: None,
     }
 }
+
+/// `p` with its doc comment set.
+pub const fn documented(p: ParamSpec, doc: &'static str) -> ParamSpec {
+    ParamSpec { doc, ..p }
+}

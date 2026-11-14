@@ -1,6 +1,8 @@
 // Lets generated code and in-crate tests refer to this crate as `::defcmd`.
 extern crate self as defcmd;
 
+#[allow(dead_code)] // used by `try_run_with` in M3.4
+mod help;
 mod parse;
 mod spec;
 #[cfg(test)]
