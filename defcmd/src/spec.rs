@@ -13,6 +13,8 @@ pub enum ParamKind {
     Positional,
     /// A flag without a value: `--x`, `--x=true`, `--x=false`.
     Switch,
+    /// A flag that takes a value: `--x value`, `--x=value`, `-x value`.
+    Flag,
 }
 
 /// One parameter of a command.
@@ -23,6 +25,8 @@ pub struct ParamSpec {
     pub kind: ParamKind,
     /// Long flag name without the dashes. `None` for positionals.
     pub long: Option<&'static str>,
+    /// Short flag name without the dash. `None` for positionals and flags without one.
+    pub short: Option<char>,
     pub doc: &'static str,
     pub type_name: fn() -> String,
     pub possible_values: fn() -> &'static [&'static str],
@@ -73,6 +77,7 @@ mod tests {
             name: "from",
             kind: ParamKind::Positional,
             long: None,
+            short: None,
             doc: "Source file.",
             type_name: <String as FromArg>::type_name,
             possible_values: <String as FromArg>::possible_values,
@@ -82,6 +87,7 @@ mod tests {
             name: "dry_run",
             kind: ParamKind::Switch,
             long: Some("dry-run"),
+            short: None,
             doc: "",
             type_name: <bool as FromArg>::type_name,
             possible_values: <bool as FromArg>::possible_values,

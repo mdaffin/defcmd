@@ -5,6 +5,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::os::unix::ffi::OsStrExt;
 
 use crate::spec::{CommandSpec, ParamKind};
 use crate::value::FromArg;
@@ -35,7 +36,7 @@ impl std::error::Error for UsageError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Raw {
     Absent,
-    /// Positionals and switches (a switch stores `true` or `false`). Later: repeated flags.
+    /// Positionals, switches (stored as `true` or `false`) and value flags. Later: repeated flags.
     Values(Vec<OsString>),
 }
 
@@ -77,7 +78,9 @@ pub fn parse(
     let mut after_double_dash = false;
     let mut seen_positional = false;
 
-    for (i, arg) in args.iter().enumerate() {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
         let bytes = arg.as_encoded_bytes();
         if after_double_dash || !bytes.starts_with(b"-") || bytes == b"-" {
             if !after_double_dash
@@ -107,51 +110,82 @@ pub fn parse(
         } else if bytes == b"--" {
             after_double_dash = true;
         } else {
-            let text = arg.to_string_lossy();
-            if let Some(long) = text.strip_prefix("--") {
-                let (name, value) = match long.split_once('=') {
-                    Some((n, v)) => (n, Some(v)),
-                    None => (long, None),
+            // `shown` is the flag as the user wrote it (without any `=value`), for messages.
+            let (found, shown, inline): (Option<usize>, String, Option<&OsStr>) =
+                if let Some(body) = bytes.strip_prefix(b"--") {
+                    let (name, inline) = match body.iter().position(|&b| b == b'=') {
+                        Some(eq) => (&body[..eq], Some(OsStr::from_bytes(&body[eq + 1..]))),
+                        None => (body, None),
+                    };
+                    let name = String::from_utf8_lossy(name);
+                    if inline.is_none() && name == "help" {
+                        return Ok(Outcome::Help);
+                    }
+                    if inline.is_none() && name == "version" && spec.version.is_some() {
+                        return Ok(Outcome::Version);
+                    }
+                    let found = spec
+                        .params
+                        .iter()
+                        .position(|p| p.kind != ParamKind::Positional && p.long == Some(&*name));
+                    (found, format!("--{name}"), inline)
+                } else {
+                    let text = arg.to_string_lossy();
+                    if text == "-h" {
+                        return Ok(Outcome::Help);
+                    }
+                    if text == "-V" && spec.version.is_some() {
+                        return Ok(Outcome::Version);
+                    }
+                    // Only exactly `-x` is a short flag: no `-x=1`, no `-x1`.
+                    let mut chars = text[1..].chars();
+                    let found = match (chars.next(), chars.next()) {
+                        (Some(c), None) => spec
+                            .params
+                            .iter()
+                            .position(|p| p.kind != ParamKind::Positional && p.short == Some(c)),
+                        _ => None,
+                    };
+                    (found, text.into_owned(), None)
                 };
-                if value.is_none() && name == "help" {
-                    return Ok(Outcome::Help);
+            match found {
+                None => {
+                    pending
+                        .get_or_insert_with(|| UsageError::new(format!("unknown flag '{shown}'")));
                 }
-                if value.is_none() && name == "version" && spec.version.is_some() {
-                    return Ok(Outcome::Version);
-                }
-                let found = spec
-                    .params
-                    .iter()
-                    .position(|p| p.kind == ParamKind::Switch && p.long == Some(name));
-                match found {
-                    Some(p) => {
-                        let value = value.unwrap_or("true");
-                        match bool::from_arg(OsStr::new(value)) {
-                            Ok(b) => raw[p] = Raw::Values(vec![b.to_string().into()]),
-                            Err(e) => {
-                                pending.get_or_insert_with(|| {
-                                    UsageError::new(format!(
-                                        "invalid value '{value}' for '{}': {e}",
-                                        spec.params[p].display_name()
-                                    ))
-                                });
-                            }
+                Some(p) if spec.params[p].kind == ParamKind::Switch => {
+                    let value = inline.unwrap_or(OsStr::new("true"));
+                    match bool::from_arg(value) {
+                        Ok(b) => raw[p] = Raw::Values(vec![b.to_string().into()]),
+                        Err(e) => {
+                            pending.get_or_insert_with(|| {
+                                UsageError::new(format!(
+                                    "invalid value '{}' for '{}': {e}",
+                                    value.to_string_lossy(),
+                                    spec.params[p].display_name()
+                                ))
+                            });
                         }
                     }
-                    None => {
-                        pending.get_or_insert_with(|| {
-                            UsageError::new(format!("unknown flag '--{name}'"))
-                        });
+                }
+                Some(p) => {
+                    // A value flag takes the next argument verbatim, whatever it looks like.
+                    let value = match inline {
+                        Some(v) => Some(v.to_owned()),
+                        None => args.get(i + 1).cloned().inspect(|_| i += 1),
+                    };
+                    match value {
+                        Some(v) => raw[p] = Raw::Values(vec![v]),
+                        None => {
+                            pending.get_or_insert_with(|| {
+                                UsageError::new(format!("flag '{shown}' is missing its value"))
+                            });
+                        }
                     }
                 }
-            } else if text == "-h" {
-                return Ok(Outcome::Help);
-            } else if text == "-V" && spec.version.is_some() {
-                return Ok(Outcome::Version);
-            } else {
-                pending.get_or_insert_with(|| UsageError::new(format!("unknown flag '{text}'")));
             }
         }
+        i += 1;
     }
 
     if let Some(e) = pending {
@@ -201,7 +235,7 @@ impl Parsed {
 mod tests {
     use super::*;
     use crate::spec::ParamSpec;
-    use crate::test_util::{positional, switch};
+    use crate::test_util::{flag, positional, switch, with_short};
 
     // from, to (positionals), force and dry_run (switches).
     static PARAMS: [ParamSpec; 4] = [
@@ -472,6 +506,182 @@ mod tests {
         let child = |w: &OsStr| (w == "list").then_some(7);
         let out = parse(&COPY, &args(&["--help", "list"]), &child).unwrap();
         assert!(matches!(out, Outcome::Help));
+    }
+
+    // Value flags and short names: target (positional), jobs (`-j, --jobs <string>`),
+    // force (`-f, --force`), name (`--name <string>`).
+    static BUILD_PARAMS: [ParamSpec; 4] = [
+        positional("target"),
+        with_short(flag("jobs", "jobs"), 'j'),
+        with_short(switch("force", "force"), 'f'),
+        flag("name", "name"),
+    ];
+    static BUILD: CommandSpec = CommandSpec {
+        path: &["build"],
+        aliases: &[],
+        doc: "",
+        params: &BUILD_PARAMS,
+        version: Some("1.0.0"),
+    };
+
+    fn build(a: &[&str]) -> Result<Outcome, UsageError> {
+        parse(&BUILD, &args(a), &no_child)
+    }
+
+    fn build_parsed(a: &[&str]) -> Parsed {
+        match build(a).unwrap() {
+            Outcome::Run(p) => p,
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    fn build_err(a: &[&str]) -> String {
+        build(a).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn value_flag_takes_the_next_argument_or_an_inline_value() {
+        assert_eq!(values(&build_parsed(&["--jobs", "8", "t"]).raw[1]), ["8"]);
+        assert_eq!(values(&build_parsed(&["--jobs=8", "t"]).raw[1]), ["8"]);
+        assert_eq!(values(&build_parsed(&["t", "--jobs=a=b"]).raw[1]), ["a=b"]);
+        assert_eq!(values(&build_parsed(&["--jobs=", "t"]).raw[1]), [""]);
+        assert_eq!(build_parsed(&["t"]).raw[1], Raw::Absent);
+    }
+
+    #[test]
+    fn short_value_flag_takes_the_next_argument() {
+        let p = build_parsed(&["-j", "8", "t"]);
+        assert_eq!(values(&p.raw[1]), ["8"]);
+        assert_eq!(values(&p.raw[0]), ["t"]);
+    }
+
+    #[test]
+    fn value_flag_consumes_the_next_argument_verbatim() {
+        assert_eq!(
+            values(&build_parsed(&["--jobs", "--force", "t"]).raw[1]),
+            ["--force"]
+        );
+        assert_eq!(
+            build_parsed(&["--jobs", "--force", "t"]).raw[2],
+            Raw::Absent
+        );
+        assert_eq!(values(&build_parsed(&["--name", "-x", "t"]).raw[3]), ["-x"]);
+        assert_eq!(values(&build_parsed(&["t", "--jobs", "-5"]).raw[1]), ["-5"]);
+        assert_eq!(values(&build_parsed(&["-j", "-", "t"]).raw[1]), ["-"]);
+        assert_eq!(values(&build_parsed(&["--jobs", "--", "t"]).raw[1]), ["--"]);
+    }
+
+    #[test]
+    fn value_flag_consumes_help_and_the_child_word() {
+        assert!(matches!(
+            build(&["--jobs", "--help", "t"]),
+            Ok(Outcome::Run(_))
+        ));
+        let child = |w: &OsStr| (w == "list").then_some(7);
+        let out = parse(&BUILD, &args(&["--jobs", "list", "list", "x"]), &child).unwrap();
+        assert!(matches!(out, Outcome::Sub { index: 7, .. }), "{out:?}");
+    }
+
+    #[test]
+    fn value_flag_without_a_value_is_an_error() {
+        assert_eq!(
+            build_err(&["t", "--jobs"]),
+            "flag '--jobs' is missing its value"
+        );
+        assert_eq!(build_err(&["t", "-j"]), "flag '-j' is missing its value");
+        assert_eq!(build_err(&["--name"]), "flag '--name' is missing its value");
+    }
+
+    #[test]
+    fn help_still_wins_over_a_missing_value() {
+        assert!(matches!(build(&["--jobs", "-h", "t"]), Ok(Outcome::Run(_))));
+        assert!(matches!(build(&["t", "--jobs=1", "-h"]), Ok(Outcome::Help)));
+        assert!(matches!(
+            build(&["-j", "--help", "--help"]),
+            Ok(Outcome::Help)
+        ));
+    }
+
+    #[test]
+    fn short_forms_other_than_dash_x_are_unknown_flags() {
+        assert_eq!(build_err(&["t", "-j8"]), "unknown flag '-j8'");
+        assert_eq!(build_err(&["t", "-j=8"]), "unknown flag '-j=8'");
+        assert_eq!(build_err(&["t", "-jf"]), "unknown flag '-jf'");
+        assert_eq!(build_err(&["t", "-ff"]), "unknown flag '-ff'");
+        assert_eq!(build_err(&["t", "-x"]), "unknown flag '-x'");
+        assert_eq!(build_err(&["t", "-J", "1"]), "unknown flag '-J'");
+    }
+
+    #[test]
+    fn short_switch_sets_true_and_takes_no_value() {
+        let p = build_parsed(&["-f", "t"]);
+        assert_eq!(values(&p.raw[2]), ["true"]);
+        assert_eq!(values(&p.raw[0]), ["t"]);
+        assert_eq!(build_err(&["-f=false", "t"]), "unknown flag '-f=false'");
+    }
+
+    #[test]
+    fn short_name_is_not_a_long_name() {
+        assert_eq!(build_err(&["t", "--j", "1"]), "unknown flag '--j'");
+        assert_eq!(build_err(&["t", "--f"]), "unknown flag '--f'");
+        assert_eq!(build_err(&["t", "-jobs"]), "unknown flag '-jobs'");
+    }
+
+    #[test]
+    fn long_name_of_a_value_flag_does_not_match_a_switch_with_another_name() {
+        assert_eq!(build_err(&["t", "--force-it"]), "unknown flag '--force-it'");
+        assert_eq!(build_err(&["t", "--jobs-x=1"]), "unknown flag '--jobs-x'");
+    }
+
+    #[test]
+    fn last_occurrence_of_a_value_flag_wins() {
+        let p = build_parsed(&["--jobs", "1", "-j", "2", "--jobs=3", "t"]);
+        assert_eq!(p.get::<String>(1).unwrap(), "3");
+    }
+
+    #[test]
+    fn value_flags_mix_with_positionals() {
+        let p = build_parsed(&["--jobs", "4", "t", "--name=x", "-f"]);
+        assert_eq!(values(&p.raw[0]), ["t"]);
+        assert_eq!(values(&p.raw[1]), ["4"]);
+        assert_eq!(values(&p.raw[2]), ["true"]);
+        assert_eq!(values(&p.raw[3]), ["x"]);
+    }
+
+    #[test]
+    fn value_after_double_dash_is_a_positional() {
+        assert_eq!(build_err(&["--", "--jobs", "1"]), "unexpected argument '1'");
+        assert_eq!(values(&build_parsed(&["--", "--jobs"]).raw[0]), ["--jobs"]);
+    }
+
+    #[test]
+    fn bad_value_is_reported_against_the_flag() {
+        let p = build_parsed(&["-j", "x", "t"]);
+        assert_eq!(
+            p.get::<bool>(1).unwrap_err().to_string(),
+            "invalid value 'x' for '--jobs': expected bool"
+        );
+    }
+
+    #[test]
+    fn non_utf8_inline_value_is_kept() {
+        use std::os::unix::ffi::OsStringExt;
+        let arg = OsString::from_vec(b"--name=a\xffb".to_vec());
+        let p = match parse(&BUILD, &[arg, "t".into()], &no_child).unwrap() {
+            Outcome::Run(p) => p,
+            other => panic!("expected Run, got {other:?}"),
+        };
+        assert_eq!(
+            p.get::<OsString>(3).unwrap(),
+            OsString::from_vec(b"a\xffb".to_vec())
+        );
+    }
+
+    #[test]
+    fn own_value_flag_error_beats_child_lookup() {
+        let child = |w: &OsStr| (w == "list").then_some(7);
+        let e = parse(&BUILD, &args(&["-j", "list"]), &child).unwrap_err();
+        assert_eq!(e.to_string(), "missing required argument 'target'");
     }
 
     fn raw_parsed(a: &[&str]) -> Parsed {

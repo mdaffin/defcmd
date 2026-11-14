@@ -41,6 +41,7 @@ fn param_spec(p: &Param) -> TokenStream {
             name: #name,
             kind: ::defcmd::ParamKind::#kind,
             long: #long,
+            short: ::core::option::Option::None,
             doc: #doc,
             type_name: <#ty as ::defcmd::FromArg>::type_name,
             possible_values: <#ty as ::defcmd::FromArg>::possible_values,
