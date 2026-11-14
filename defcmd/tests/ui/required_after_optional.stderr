@@ -1,0 +1,5 @@
+error: a required positional cannot follow an optional one
+ --> tests/ui/required_after_optional.rs:4:41
+  |
+4 | fn copy(target: Option<String>, source: String) {
+  |                                         ^^^^^^

@@ -1,0 +1,5 @@
+error: `#[rest]` needs a `Vec<T>`
+ --> tests/ui/rest_not_vec.rs:4:26
+  |
+4 | fn copy(#[rest] sources: String) {
+  |                          ^^^^^^

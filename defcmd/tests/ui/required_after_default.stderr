@@ -1,0 +1,5 @@
+error: a required positional cannot follow an optional one
+ --> tests/ui/required_after_default.rs:4:43
+  |
+4 | fn copy(#[default(1)] count: u32, source: String) {
+  |                                           ^^^^^^
