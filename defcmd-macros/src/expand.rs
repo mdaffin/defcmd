@@ -5,16 +5,10 @@ use quote::{format_ident, quote};
 use syn::ext::IdentExt;
 use syn::{Expr, ExprLit, FnArg, ItemFn, Lit, Type};
 
-use crate::model::{Command, CommandAttr, Param, TypeKind, inner_type};
+use crate::model::{Command, CommandAttr, Param, TypeKind, classify, inner_type};
 
 /// Rejects parameter combinations that are not supported, so nothing is silently miscompiled.
 fn check_supported(command: &Command) -> syn::Result<()> {
-    let unsupported = |p: &Param, what: &str| {
-        Err(syn::Error::new_spanned(
-            &p.ty,
-            format!("{what} is not supported yet"),
-        ))
-    };
     let mut seen_optional = false;
     let mut seen_rest = false;
     for p in &command.params {
@@ -54,17 +48,19 @@ fn check_supported(command: &Command) -> syn::Result<()> {
             }
         }
         match (p.flag, p.kind, p.default.is_some()) {
-            (false, TypeKind::Option, true) => {
+            (_, TypeKind::Option, true) => {
                 return Err(syn::Error::new_spanned(
                     &p.ty,
                     "`#[default]` cannot be combined with `Option`",
                 ));
             }
-            (false, TypeKind::Option, false) => {}
-            (_, TypeKind::Option | TypeKind::Vec, _) => {
-                return unsupported(p, "this parameter type");
+            (true, TypeKind::Vec, true) => {
+                return Err(syn::Error::new_spanned(
+                    &p.ty,
+                    "`#[default]` cannot be combined with a `Vec` flag",
+                ));
             }
-            (true, TypeKind::Bool, true) => return unsupported(p, "`#[default]` on a switch"),
+            (_, TypeKind::Option, false) => {}
             (true, TypeKind::Other, false) => {
                 return Err(syn::Error::new_spanned(
                     &p.ty,
@@ -82,6 +78,13 @@ fn is_optional(p: &Param) -> bool {
     !p.flag && (p.kind == TypeKind::Option || p.default.is_some())
 }
 
+/// A flag of type `Option<bool>`: a switch with three states.
+fn is_tri_state(p: &Param) -> bool {
+    p.flag
+        && p.kind == TypeKind::Option
+        && inner_type(&p.ty).is_some_and(|t| classify(t) == TypeKind::Bool)
+}
+
 /// The variadic positional: marked `#[rest]` or a `Vec<T>` that is not a flag.
 fn is_rest(p: &Param) -> bool {
     !p.flag && (p.rest || p.kind == TypeKind::Vec)
@@ -92,7 +95,7 @@ fn is_rest(p: &Param) -> bool {
 fn value_type(p: &Param) -> &Type {
     match (p.kind, inner_type(&p.ty)) {
         (TypeKind::Option, Some(inner)) => inner,
-        (TypeKind::Vec, Some(inner)) if is_rest(p) => inner,
+        (TypeKind::Vec, Some(inner)) if is_rest(p) || p.flag => inner,
         _ => &p.ty,
     }
 }
@@ -143,12 +146,13 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
     let ty = value_type(p);
     let optional = is_optional(p);
     let rest = is_rest(p);
+    let repeatable = p.flag && p.kind == TypeKind::Vec;
     let (kind, long) = if p.flag {
         let long = p
             .explicit_long
             .clone()
             .unwrap_or_else(|| p.name.replace('_', "-"));
-        let kind = if p.kind == TypeKind::Bool {
+        let kind = if p.kind == TypeKind::Bool || is_tri_state(p) {
             quote!(Switch)
         } else {
             quote!(Flag)
@@ -179,6 +183,7 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
             default_display: #default_display,
             optional: #optional,
             rest: #rest,
+            repeatable: #repeatable,
         }
     }
 }
@@ -187,10 +192,10 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
 fn convert(index: usize, p: &Param) -> TokenStream {
     let ident = &p.ident;
     let ty = &p.ty;
-    if is_rest(p) {
+    if is_rest(p) || (p.flag && p.kind == TypeKind::Vec) {
         let inner = value_type(p);
         quote!(let #ident: #ty = __parsed.get_all::<#inner>(#index)?;)
-    } else if p.kind == TypeKind::Option && !p.flag {
+    } else if p.kind == TypeKind::Option {
         let inner = value_type(p);
         quote!(let #ident: #ty = __parsed.get_opt::<#inner>(#index)?;)
     } else if p.default.is_some() {
@@ -384,6 +389,25 @@ mod tests {
         assert!(check_supported(&Command::from_fn(&f).unwrap()).is_ok());
         let f: ItemFn = parse_quote! { fn main(a: String, b: Vec<u8>, #[flag] c: bool) {} };
         assert!(check_supported(&Command::from_fn(&f).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn option_and_vec_flags_are_supported() {
+        let f: ItemFn = parse_quote! {
+            fn main(#[flag] a: Option<u8>, #[flag(-x)] b: Vec<String>, #[flag] c: Option<bool>) {}
+        };
+        assert!(check_supported(&Command::from_fn(&f).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn flags_cannot_have_defaults_with_option_or_vec() {
+        let f: ItemFn = parse_quote! { fn main(#[flag] #[default(None)] a: Option<u8>) {} };
+        assert_eq!(rejected(f), "`#[default]` cannot be combined with `Option`");
+        let f: ItemFn = parse_quote! { fn main(#[flag] #[default(vec![])] a: Vec<u8>) {} };
+        assert_eq!(
+            rejected(f),
+            "`#[default]` cannot be combined with a `Vec` flag"
+        );
     }
 
     #[test]

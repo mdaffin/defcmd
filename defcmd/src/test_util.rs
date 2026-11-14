@@ -15,6 +15,7 @@ pub const fn positional(name: &'static str) -> ParamSpec {
         default_display: None,
         optional: false,
         rest: false,
+        repeatable: false,
     }
 }
 
@@ -30,6 +31,7 @@ pub const fn switch(name: &'static str, long: &'static str) -> ParamSpec {
         default_display: None,
         optional: false,
         rest: false,
+        repeatable: false,
     }
 }
 
@@ -67,4 +69,12 @@ pub const fn optional(p: ParamSpec) -> ParamSpec {
 /// `p` marked as the rest positional.
 pub const fn rest(p: ParamSpec) -> ParamSpec {
     ParamSpec { rest: true, ..p }
+}
+
+/// `p` marked as a repeatable value flag.
+pub const fn repeatable(p: ParamSpec) -> ParamSpec {
+    ParamSpec {
+        repeatable: true,
+        ..p
+    }
 }

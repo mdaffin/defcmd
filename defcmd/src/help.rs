@@ -53,10 +53,13 @@ fn flag_entry(p: &ParamSpec) -> String {
     if p.kind == ParamKind::Flag {
         head.push_str(&format!(" <{}>", (p.type_name)()));
     }
-    let default = p
-        .default_display
-        .and_then(|show| show())
-        .map(|d| format!("(default: {d})"));
+    let default = if p.repeatable {
+        Some("(repeatable)".to_string())
+    } else {
+        p.default_display
+            .and_then(|show| show())
+            .map(|d| format!("(default: {d})"))
+    };
     match (p.doc.is_empty(), default) {
         (_, None) => entry(head, p.doc),
         (true, Some(d)) => format!("  {head} {d}"),
@@ -161,7 +164,9 @@ pub fn render_version(program: &str, version: &str) -> String {
 mod tests {
     use super::*;
     use crate::spec::ParamSpec;
-    use crate::test_util::{documented, flag, optional, positional, rest, switch, with_short};
+    use crate::test_util::{
+        documented, flag, optional, positional, repeatable, rest, switch, with_short,
+    };
     use crate::value::FromArg;
 
     static HELLO_PARAMS: [ParamSpec; 2] = [
@@ -484,6 +489,36 @@ Flags:
   --dry-run: Do not write.
 ";
         assert_eq!(render_help(&MIXED, "app", &[]), expected);
+    }
+
+    #[test]
+    fn repeatable_flags_are_marked_and_optional_ones_show_no_default() {
+        static PARAMS: [ParamSpec; 3] = [
+            documented(
+                repeatable(with_short(flag("exclude", "exclude"), 'x')),
+                "Skip files matching a pattern.",
+            ),
+            repeatable(flag("include", "include")),
+            documented(int_flag(flag("retries", "retries")), "Retry count."),
+        ];
+        static SPEC: CommandSpec = CommandSpec {
+            path: &[],
+            aliases: &[],
+            doc: "",
+            params: &PARAMS,
+            version: None,
+        };
+        let expected = "\
+Usage:
+  > app {flags}
+
+Flags:
+  -h, --help: Display the help message for this command
+  -x, --exclude <string>: Skip files matching a pattern. (repeatable)
+  --include <string> (repeatable)
+  --retries <int>: Retry count.
+";
+        assert_eq!(render_help(&SPEC, "app", &[]), expected);
     }
 
     #[test]

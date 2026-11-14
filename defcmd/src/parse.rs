@@ -180,7 +180,10 @@ pub fn parse(
                         None => args.get(i + 1).cloned().inspect(|_| i += 1),
                     };
                     match value {
-                        Some(v) => raw[p] = Raw::Values(vec![v]),
+                        Some(v) => match &mut raw[p] {
+                            Raw::Values(values) if spec.params[p].repeatable => values.push(v),
+                            slot => *slot = Raw::Values(vec![v]),
+                        },
                         None => {
                             pending.get_or_insert_with(|| {
                                 UsageError::new(format!("flag '{shown}' is missing its value"))
@@ -891,5 +894,72 @@ mod tests {
         );
         // An OsString does not care.
         assert!(p.get::<OsString>(0).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod flag_form_tests {
+    use super::*;
+    use crate::spec::ParamSpec;
+    use crate::test_util::{flag, positional, repeatable, switch, with_short};
+
+    // to (positional), exclude (repeatable value flag, -x), jobs (value flag, -j), force (-f).
+    static PARAMS: [ParamSpec; 4] = [
+        positional("to"),
+        repeatable(with_short(flag("exclude", "exclude"), 'x')),
+        with_short(flag("jobs", "jobs"), 'j'),
+        with_short(switch("force", "force"), 'f'),
+    ];
+    static SPEC: CommandSpec = CommandSpec {
+        path: &["copy"],
+        aliases: &[],
+        doc: "",
+        params: &PARAMS,
+        version: Some("1.0.0"),
+    };
+
+    fn args(a: &[&str]) -> Vec<OsString> {
+        a.iter().map(OsString::from).collect()
+    }
+
+    fn try_parse(a: &[&str]) -> Result<Outcome, UsageError> {
+        parse(&SPEC, &args(a), &|_| None)
+    }
+
+    fn parsed(a: &[&str]) -> Parsed {
+        match try_parse(a).unwrap() {
+            Outcome::Run(p) => p,
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    fn err(a: &[&str]) -> String {
+        try_parse(a).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn repeatable_flag_collects_every_occurrence_in_order() {
+        let p = parsed(&["a", "-x", "*.tmp", "--exclude", "*.bak", "--exclude=c"]);
+        assert_eq!(
+            p.get_all::<String>(1).unwrap(),
+            ["*.tmp", "*.bak", "c"].map(String::from)
+        );
+    }
+
+    #[test]
+    fn repeatable_flag_never_takes_several_values_at_once() {
+        // `b` is the next positional, not a second value.
+        assert_eq!(err(&["a", "-x", "p", "b"]), "unexpected argument 'b'");
+    }
+
+    #[test]
+    fn absent_repeatable_flag_is_empty() {
+        assert!(parsed(&["a"]).get_all::<String>(1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn plain_value_flag_still_keeps_the_last_value() {
+        let p = parsed(&["a", "-j", "1", "-j", "2"]);
+        assert_eq!(p.get_opt::<u8>(2).unwrap(), Some(2));
     }
 }

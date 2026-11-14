@@ -37,6 +37,8 @@ pub struct ParamSpec {
     /// The variadic positional: takes every remaining positional, zero or more. Must be the last
     /// positional; its type is that of one element.
     pub rest: bool,
+    /// A value flag that collects every occurrence (`Vec<T>`): `-x a -x b`.
+    pub repeatable: bool,
 }
 
 impl ParamSpec {
@@ -89,6 +91,7 @@ mod tests {
             default_display: None,
             optional: false,
             rest: false,
+            repeatable: false,
         },
         ParamSpec {
             name: "dry_run",
@@ -101,6 +104,7 @@ mod tests {
             default_display: None,
             optional: false,
             rest: false,
+            repeatable: false,
         },
     ];
 
