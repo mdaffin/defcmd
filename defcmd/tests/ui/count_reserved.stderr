@@ -1,0 +1,5 @@
+error: `#[count]` is reserved: counted flags are not supported yet
+ --> tests/ui/count_reserved.rs:4:8
+  |
+4 | fn run(#[count] verbose: u8) {
+  |        ^^^^^^^^

@@ -1,0 +1,5 @@
+error: `#[rest]` cannot be combined with `#[flag]` or `#[default]`
+ --> tests/ui/default_with_rest.rs:4:42
+  |
+4 | fn run(#[default(vec![])] #[rest] files: Vec<String>) {
+  |                                          ^^^^^^^^^^^

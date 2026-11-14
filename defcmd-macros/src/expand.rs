@@ -5,7 +5,10 @@ use quote::{format_ident, quote};
 use syn::ext::IdentExt;
 use syn::{Expr, ExprLit, FnArg, ItemFn, Lit, Type};
 
-use crate::model::{Command, CommandAttr, Param, ParseAttr, TypeKind, classify, inner_type};
+use crate::model::{
+    Command, CommandAttr, LONG_NAME_RULE, Param, ParseAttr, TypeKind, classify, inner_type,
+    valid_long_name,
+};
 
 /// Rejects parameter combinations that are not supported, so nothing is silently miscompiled.
 fn check_supported(command: &Command) -> syn::Result<()> {
@@ -17,6 +20,27 @@ fn check_supported(command: &Command) -> syn::Result<()> {
                 &p.ty,
                 "`#[parse]` cannot be used on a switch",
             ));
+        }
+        if p.kind == TypeKind::Option
+            && inner_type(&p.ty)
+                .is_some_and(|t| matches!(classify(t), TypeKind::Option | TypeKind::Vec))
+        {
+            return Err(syn::Error::new_spanned(
+                &p.ty,
+                "`Option` of `Option` or `Vec` is not supported: use `Option<T>` or `Vec<T>`",
+            ));
+        }
+        if p.flag {
+            let long = p
+                .explicit_long
+                .clone()
+                .unwrap_or_else(|| p.name.replace('_', "-"));
+            if !valid_long_name(&long) {
+                return Err(syn::Error::new_spanned(
+                    &p.ident,
+                    format!("the flag name `{long}` is not valid: {LONG_NAME_RULE}"),
+                ));
+            }
         }
         if p.rest && (p.flag || p.default.is_some()) {
             return Err(syn::Error::new_spanned(

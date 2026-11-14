@@ -1,0 +1,5 @@
+error: `#[default]` cannot be combined with `Option`
+ --> tests/ui/default_with_option.rs:4:36
+  |
+4 | fn run(#[flag] #[default(1)] jobs: Option<usize>) {
+  |                                    ^^^^^^^^^^^^^

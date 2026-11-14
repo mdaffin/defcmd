@@ -1,0 +1,5 @@
+error: `Option` of `Option` or `Vec` is not supported: use `Option<T>` or `Vec<T>`
+ --> tests/ui/option_option.rs:4:14
+  |
+4 | fn run(name: Option<Option<String>>) {
+  |              ^^^^^^^^^^^^^^^^^^^^^^

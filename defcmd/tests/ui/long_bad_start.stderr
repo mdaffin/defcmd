@@ -1,0 +1,5 @@
+error: a long flag name is ASCII letters, digits and hyphens, starting with a letter
+ --> tests/ui/long_bad_start.rs:4:17
+  |
+4 | fn run(#[flag(--1x)] verbose: bool) {
+  |                 ^^

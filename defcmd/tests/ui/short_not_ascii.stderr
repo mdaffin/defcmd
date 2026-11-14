@@ -1,0 +1,5 @@
+error: a short flag name is exactly one ASCII letter or digit
+ --> tests/ui/short_not_ascii.rs:4:16
+  |
+4 | fn run(#[flag(-é)] verbose: bool) {
+  |                ^

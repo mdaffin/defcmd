@@ -113,6 +113,15 @@ fn name_word(input: ParseStream) -> syn::Result<String> {
     }
 }
 
+pub const LONG_NAME_RULE: &str =
+    "a long flag name is ASCII letters, digits and hyphens, starting with a letter";
+
+/// Whether `long` (without the leading `--`) is a legal long flag name.
+pub fn valid_long_name(long: &str) -> bool {
+    long.starts_with(|c: char| c.is_ascii_alphabetic())
+        && long.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 /// Parses the arguments of `#[flag(..)]`: `-x`, `--long` and `--long-name`, comma separated, at
 /// most one of each. `-x` and `--long` are not Rust expressions, so the tokens are read by hand.
 fn parse_flag_names(input: ParseStream) -> syn::Result<FlagNames> {
@@ -128,13 +137,8 @@ fn parse_flag_names(input: ParseStream) -> syn::Result<FlagNames> {
                 long.push('-');
                 long.push_str(&name_word(input)?);
             }
-            let valid = long.starts_with(|c: char| c.is_ascii_alphabetic())
-                && long.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-            if !valid {
-                return Err(syn::Error::new(
-                    start,
-                    "a long flag name is ASCII letters, digits and hyphens, starting with a letter",
-                ));
+            if !valid_long_name(&long) {
+                return Err(syn::Error::new(start, LONG_NAME_RULE));
             }
             if names.long.replace(long).is_some() {
                 return Err(syn::Error::new(start, "a flag has only one long name"));
@@ -214,6 +218,11 @@ impl Command {
                         ));
                     };
                     rest = true;
+                } else if attr.path().is_ident("count") {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "`#[count]` is reserved: counted flags are not supported yet",
+                    ));
                 } else if attr.path().is_ident("parse") {
                     if parse.is_some() {
                         return Err(syn::Error::new_spanned(attr, "duplicate `#[parse]`"));
