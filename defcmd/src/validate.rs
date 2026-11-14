@@ -1,7 +1,7 @@
 //! Validation of the command tree: clashes between different commands, which
 //! only show up at run time because the registry is built at link time.
 
-use crate::spec::Registration;
+use crate::spec::{ParamSpec, Registration};
 
 /// `command 'a b'` or `the root command`.
 fn describe_path(path: &[&str]) -> String {
@@ -30,7 +30,7 @@ struct Entity<'a> {
 }
 
 /// Every problem found among `regs`, in a stable order: duplicate paths, then more than one root,
-/// then names that clash among siblings.
+/// then names that clash among siblings, then problems with global flags.
 pub(crate) fn problems(regs: &[&Registration]) -> Vec<String> {
     let mut problems = Vec::new();
 
@@ -112,6 +112,91 @@ pub(crate) fn problems(regs: &[&Registration]) -> Vec<String> {
                     problems.push(format!(
                         "the name '{name}'{at} is used by both {} and {}",
                         a.shown, b.shown
+                    ));
+                }
+            }
+        }
+    }
+    problems.extend(global_problems(regs));
+    problems
+}
+
+/// The long names a flag answers to: its own, and `no-<long>` when it can be negated.
+fn long_names(p: &ParamSpec) -> Vec<String> {
+    let Some(long) = p.long else {
+        return Vec::new();
+    };
+    let mut names = vec![long.to_string()];
+    if p.negatable {
+        names.push(format!("no-{long}"));
+    }
+    names
+}
+
+/// How a redeclared global flag differs from the root's, as a list of what differs.
+fn differences(own: &ParamSpec, root: &ParamSpec) -> Vec<&'static str> {
+    let mut found = Vec::new();
+    if own.kind != root.kind {
+        found.push("kind");
+    }
+    if own.short != root.short {
+        found.push("short name");
+    }
+    if (own.type_name)() != (root.type_name)() {
+        found.push("type");
+    }
+    if own.negatable != root.negatable {
+        found.push("negatable");
+    }
+    if own.repeatable != root.repeatable {
+        found.push("repeatable");
+    }
+    found
+}
+
+/// Problems with global flags: the flags of the root marked global are accepted by every
+/// command. A command that marks a flag global must repeat the root's flag exactly, and its other
+/// flags must not use a name or short form a global flag has.
+fn global_problems(regs: &[&Registration]) -> Vec<String> {
+    let Some(root) = regs.iter().find(|r| r.spec.path.is_empty()) else {
+        return Vec::new();
+    };
+    let globals: Vec<&ParamSpec> = root.spec.params.iter().filter(|p| p.global).collect();
+    let mut problems = Vec::new();
+    for reg in regs.iter().filter(|r| !r.spec.path.is_empty()) {
+        let shown = format!("{} ({})", describe_path(reg.spec.path), reg.location);
+        for p in reg.spec.params.iter().filter(|p| p.long.is_some()) {
+            let long = p.long.unwrap_or_default();
+            if p.global {
+                match globals.iter().find(|g| g.long == p.long) {
+                    None => problems.push(format!(
+                        "flag '--{long}' of {shown} is marked global, but the root command has \
+                         no global flag '--{long}'"
+                    )),
+                    Some(root_flag) => {
+                        let found = differences(p, root_flag);
+                        if !found.is_empty() {
+                            problems.push(format!(
+                                "global flag '--{long}' of {shown} differs from the root's: {}",
+                                found.join(", ")
+                            ));
+                        }
+                    }
+                }
+                continue;
+            }
+            for g in &globals {
+                let g_long = g.long.unwrap_or_default();
+                for name in long_names(p) {
+                    if long_names(g).contains(&name) {
+                        problems.push(format!(
+                            "flag '--{name}' of {shown} clashes with the global flag '--{g_long}'"
+                        ));
+                    }
+                }
+                if let Some(short) = p.short.filter(|s| g.short == Some(*s)) {
+                    problems.push(format!(
+                        "flag '-{short}' of {shown} clashes with the global flag '--{g_long}'"
                     ));
                 }
             }
@@ -288,5 +373,130 @@ mod tests {
     fn duplicate_paths_are_all_reported_once_each() {
         let found = problems(&[&R_GET, &R_ROOT, &R_GET2, &R_HAS, &R_GET3, &R_HAS2]);
         assert_eq!(found.len(), 2);
+    }
+
+    // A root with the global flags --verbose/-v (switch) and --jobs (value flag).
+    mod globals {
+        use super::*;
+        use crate::spec::ParamSpec;
+        use crate::test_util::{flag, global, negatable, repeatable, switch, with_short};
+
+        static ROOT_PARAMS: [ParamSpec; 2] = [
+            global(with_short(switch("verbose", "verbose"), 'v')),
+            global(flag("jobs", "jobs")),
+        ];
+        static G_ROOT: CommandSpec = CommandSpec {
+            params: &ROOT_PARAMS,
+            ..spec(&[], &[])
+        };
+        static R_G_ROOT: Registration = reg(&G_ROOT, "main", 1);
+
+        const fn child(path: &'static [&'static str], params: &'static [ParamSpec]) -> CommandSpec {
+            CommandSpec {
+                params,
+                ..spec(path, &[])
+            }
+        }
+
+        static SAME: [ParamSpec; 1] = [global(with_short(switch("verbose", "verbose"), 'v'))];
+        static C_SAME: CommandSpec = child(&["list"], &SAME);
+        static R_SAME: Registration = reg(&C_SAME, "list", 2);
+
+        #[test]
+        fn a_child_may_redeclare_a_global_flag_exactly() {
+            assert!(problems(&[&R_G_ROOT, &R_SAME]).is_empty());
+        }
+
+        static UNKNOWN: [ParamSpec; 1] = [global(switch("dry_run", "dry-run"))];
+        static C_UNKNOWN: CommandSpec = child(&["list"], &UNKNOWN);
+        static R_UNKNOWN: Registration = reg(&C_UNKNOWN, "list", 3);
+
+        #[test]
+        fn a_global_flag_the_root_does_not_have_is_reported() {
+            assert_eq!(
+                problems(&[&R_G_ROOT, &R_UNKNOWN]),
+                [
+                    "flag '--dry-run' of command 'list' (m::list (f.rs:3)) is marked global, but the root command has no global flag '--dry-run'"
+                ]
+            );
+            // Not even when the root's `--dry-run` is an ordinary flag.
+            assert_eq!(problems(&[&R_ROOT, &R_UNKNOWN]).len(), 1);
+        }
+
+        static DIFFERS: [ParamSpec; 2] = [
+            global(switch("verbose", "verbose")),
+            global(repeatable(negatable(flag("jobs", "jobs")))),
+        ];
+        static C_DIFFERS: CommandSpec = child(&["list"], &DIFFERS);
+        static R_DIFFERS: Registration = reg(&C_DIFFERS, "list", 4);
+
+        #[test]
+        fn a_redeclaration_that_differs_from_the_root_is_reported() {
+            assert_eq!(
+                problems(&[&R_G_ROOT, &R_DIFFERS]),
+                [
+                    "global flag '--verbose' of command 'list' (m::list (f.rs:4)) differs from the root's: short name",
+                    "global flag '--jobs' of command 'list' (m::list (f.rs:4)) differs from the root's: negatable, repeatable",
+                ]
+            );
+        }
+
+        static KIND: [ParamSpec; 1] = [global(with_short(flag("verbose", "verbose"), 'v'))];
+        static C_KIND: CommandSpec = child(&["list"], &KIND);
+        static R_KIND: Registration = reg(&C_KIND, "list", 5);
+
+        #[test]
+        fn a_switch_and_a_value_flag_differ_in_kind_and_type() {
+            assert_eq!(
+                problems(&[&R_G_ROOT, &R_KIND]),
+                [
+                    "global flag '--verbose' of command 'list' (m::list (f.rs:5)) differs from the root's: kind, type"
+                ]
+            );
+        }
+
+        static CLASH: [ParamSpec; 3] = [
+            switch("verbose", "verbose"),
+            with_short(switch("quick", "quick"), 'v'),
+            negatable(switch("jobs", "jobs")),
+        ];
+        static C_CLASH: CommandSpec = child(&["list"], &CLASH);
+        static R_CLASH: Registration = reg(&C_CLASH, "list", 6);
+
+        #[test]
+        fn an_ordinary_flag_cannot_reuse_a_global_name_or_short() {
+            assert_eq!(
+                problems(&[&R_G_ROOT, &R_CLASH]),
+                [
+                    "flag '--verbose' of command 'list' (m::list (f.rs:6)) clashes with the global flag '--verbose'",
+                    "flag '-v' of command 'list' (m::list (f.rs:6)) clashes with the global flag '--verbose'",
+                    "flag '--jobs' of command 'list' (m::list (f.rs:6)) clashes with the global flag '--jobs'",
+                ]
+            );
+        }
+
+        static C_NEG_ROOT: CommandSpec = CommandSpec {
+            params: &NEGATED_ROOT,
+            ..spec(&[], &[])
+        };
+        static NEGATED_ROOT: [ParamSpec; 1] = [global(negatable(switch("color", "color")))];
+        static C_NO_COLOR: CommandSpec = child(&["list"], &[switch("no_color", "no-color")]);
+        static R_NEG_ROOT: Registration = reg(&C_NEG_ROOT, "main", 1);
+        static R_NO_COLOR: Registration = reg(&C_NO_COLOR, "list", 7);
+
+        #[test]
+        fn the_generated_negation_of_a_global_flag_is_taken_too() {
+            let found = problems(&[&R_NEG_ROOT, &R_NO_COLOR]);
+            assert_eq!(found.len(), 1, "{found:?}");
+            assert!(found[0].contains("'--no-color'"), "{found:?}");
+        }
+
+        #[test]
+        fn the_root_itself_and_trees_without_globals_are_not_checked() {
+            assert!(problems(&[&R_G_ROOT]).is_empty());
+            assert!(problems(&[&R_ROOT, &R_GET]).is_empty());
+            // No root: nothing to compare with.
+            assert!(problems(&[&R_SAME]).is_empty());
+        }
     }
 }
