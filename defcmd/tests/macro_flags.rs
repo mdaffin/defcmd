@@ -165,7 +165,10 @@ fn bad_and_missing_values_are_usage_errors() {
         &["app", "build", "a", "-j"],
         "flag '-j' is missing its value",
     );
-    usage_error(&["app", "build", "a", "-j8"], "unknown flag '-j8'");
+    usage_error(
+        &["app", "build", "a", "-j8"],
+        "flag '-j' takes a value, so it must be last in a bundle",
+    );
     usage_error(&["app", "build", "a", "-j=8"], "unknown flag '-j=8'");
 }
 

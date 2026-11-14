@@ -60,6 +60,17 @@ pub enum Outcome {
     },
 }
 
+/// One flag named by an argument, before it is applied.
+struct Use<'a> {
+    found: Option<usize>,
+    shown: String,
+    inline: Option<&'a OsStr>,
+    /// Named by `--no-x`.
+    negated: bool,
+    /// A value flag in a short bundle that is not the last letter.
+    not_last: bool,
+}
+
 /// Parse `args` (without the command word itself) against `spec`.
 ///
 /// `child` is asked about the first positional word only, before any `--`.
@@ -115,98 +126,143 @@ pub fn parse(
         } else if bytes == b"--" {
             after_double_dash = true;
         } else {
-            // `shown` is the flag as the user wrote it (without any `=value`), for messages.
-            // `negated` is set when `--no-x` named the negatable switch `x`.
-            let mut negated = false;
-            let (found, shown, inline): (Option<usize>, String, Option<&OsStr>) =
-                if let Some(body) = bytes.strip_prefix(b"--") {
-                    let (name, inline) = match body.iter().position(|&b| b == b'=') {
-                        Some(eq) => (&body[..eq], Some(OsStr::from_bytes(&body[eq + 1..]))),
-                        None => (body, None),
-                    };
-                    let name = String::from_utf8_lossy(name);
-                    if inline.is_none() && name == "help" {
-                        return Ok(Outcome::Help);
-                    }
-                    if inline.is_none() && name == "version" && spec.version.is_some() {
-                        return Ok(Outcome::Version);
-                    }
-                    let by_long = |wanted: &str, negatable_only: bool| {
-                        spec.params.iter().position(|p| {
-                            p.kind != ParamKind::Positional
-                                && p.long == Some(wanted)
-                                && (p.negatable || !negatable_only)
-                        })
-                    };
-                    let mut found = by_long(&name, false);
-                    // `--no-x` is the negation of a negatable `x`, unless a switch is really
-                    // called `--no-x`. A negation takes no `=value`.
-                    if found.is_none()
-                        && inline.is_none()
-                        && let Some(base) = name.strip_prefix("no-")
-                    {
-                        found = by_long(base, true);
-                        negated = found.is_some();
-                    }
-                    (found, format!("--{name}"), inline)
-                } else {
-                    let text = arg.to_string_lossy();
-                    if text == "-h" {
-                        return Ok(Outcome::Help);
-                    }
-                    if text == "-V" && spec.version.is_some() {
-                        return Ok(Outcome::Version);
-                    }
-                    // Only exactly `-x` is a short flag: no `-x=1`, no `-x1`.
-                    let mut chars = text[1..].chars();
-                    let found = match (chars.next(), chars.next()) {
-                        (Some(c), None) => spec
-                            .params
-                            .iter()
-                            .position(|p| p.kind != ParamKind::Positional && p.short == Some(c)),
-                        _ => None,
-                    };
-                    (found, text.into_owned(), None)
+            // One entry per flag named by this argument: a long flag, or each letter of a short
+            // bundle. `shown` is the flag as the user wrote it (without any `=value`).
+            let mut uses: Vec<Use> = Vec::new();
+            if let Some(body) = bytes.strip_prefix(b"--") {
+                let (name, inline) = match body.iter().position(|&b| b == b'=') {
+                    Some(eq) => (&body[..eq], Some(OsStr::from_bytes(&body[eq + 1..]))),
+                    None => (body, None),
                 };
-            match found {
-                None => {
-                    pending
-                        .get_or_insert_with(|| UsageError::new(format!("unknown flag '{shown}'")));
+                let name = String::from_utf8_lossy(name);
+                if inline.is_none() && name == "help" {
+                    return Ok(Outcome::Help);
                 }
-                Some(p) if spec.params[p].kind == ParamKind::Switch => {
-                    let value = match (inline, negated) {
-                        (_, true) => OsStr::new("false"),
-                        (Some(v), false) => v,
-                        (None, false) => OsStr::new("true"),
-                    };
-                    match bool::from_arg(value) {
-                        Ok(b) => raw[p] = Raw::Values(vec![b.to_string().into()]),
-                        Err(e) => {
-                            pending.get_or_insert_with(|| {
-                                UsageError::new(format!(
-                                    "invalid value '{}' for '{}': {e}",
-                                    value.to_string_lossy(),
-                                    spec.params[p].display_name()
-                                ))
-                            });
+                if inline.is_none() && name == "version" && spec.version.is_some() {
+                    return Ok(Outcome::Version);
+                }
+                let by_long = |wanted: &str, negatable_only: bool| {
+                    spec.params.iter().position(|p| {
+                        p.kind != ParamKind::Positional
+                            && p.long == Some(wanted)
+                            && (p.negatable || !negatable_only)
+                    })
+                };
+                let mut found = by_long(&name, false);
+                let mut negated = false;
+                // `--no-x` is the negation of a negatable `x`, unless a switch is really
+                // called `--no-x`. A negation takes no `=value`.
+                if found.is_none()
+                    && inline.is_none()
+                    && let Some(base) = name.strip_prefix("no-")
+                {
+                    found = by_long(base, true);
+                    negated = found.is_some();
+                }
+                uses.push(Use {
+                    found,
+                    shown: format!("--{name}"),
+                    inline,
+                    negated,
+                    not_last: false,
+                });
+            } else {
+                // Short flags bundle (`-rf` is `-r -f`) but never take an attached value, so
+                // `-j8` and `-j=8` are a value flag that is not last.
+                let text = arg.to_string_lossy();
+                // An `=` is not a flag letter: `-j=8` and `-f=false` are unknown as a whole.
+                let letters: Vec<char> = if text.contains('=') {
+                    Vec::new()
+                } else {
+                    text[1..].chars().collect()
+                };
+                if letters.is_empty() {
+                    uses.push(Use {
+                        found: None,
+                        shown: text.to_string(),
+                        inline: None,
+                        negated: false,
+                        not_last: false,
+                    });
+                }
+                for (k, &c) in letters.iter().enumerate() {
+                    let found = spec
+                        .params
+                        .iter()
+                        .position(|p| p.kind != ParamKind::Positional && p.short == Some(c));
+                    if found.is_none() && c == 'h' {
+                        return Ok(Outcome::Help);
+                    }
+                    if found.is_none() && c == 'V' && spec.version.is_some() {
+                        return Ok(Outcome::Version);
+                    }
+                    let not_last = k + 1 < letters.len()
+                        && found.is_some_and(|p| spec.params[p].kind == ParamKind::Flag);
+                    uses.push(Use {
+                        found,
+                        shown: format!("-{c}"),
+                        inline: None,
+                        negated: false,
+                        not_last,
+                    });
+                }
+            }
+            for u in uses {
+                let Use {
+                    found,
+                    shown,
+                    inline,
+                    negated,
+                    not_last,
+                } = u;
+                match found {
+                    None => {
+                        pending.get_or_insert_with(|| {
+                            UsageError::new(format!("unknown flag '{shown}'"))
+                        });
+                    }
+                    Some(_) if not_last => {
+                        pending.get_or_insert_with(|| {
+                            UsageError::new(format!(
+                                "flag '{shown}' takes a value, so it must be last in a bundle"
+                            ))
+                        });
+                    }
+                    Some(p) if spec.params[p].kind == ParamKind::Switch => {
+                        let value = match (inline, negated) {
+                            (_, true) => OsStr::new("false"),
+                            (Some(v), false) => v,
+                            (None, false) => OsStr::new("true"),
+                        };
+                        match bool::from_arg(value) {
+                            Ok(b) => raw[p] = Raw::Values(vec![b.to_string().into()]),
+                            Err(e) => {
+                                pending.get_or_insert_with(|| {
+                                    UsageError::new(format!(
+                                        "invalid value '{}' for '{}': {e}",
+                                        value.to_string_lossy(),
+                                        spec.params[p].display_name()
+                                    ))
+                                });
+                            }
                         }
                     }
-                }
-                Some(p) => {
-                    // A value flag takes the next argument verbatim, whatever it looks like.
-                    let value = match inline {
-                        Some(v) => Some(v.to_owned()),
-                        None => args.get(i + 1).cloned().inspect(|_| i += 1),
-                    };
-                    match value {
-                        Some(v) => match &mut raw[p] {
-                            Raw::Values(values) if spec.params[p].repeatable => values.push(v),
-                            slot => *slot = Raw::Values(vec![v]),
-                        },
-                        None => {
-                            pending.get_or_insert_with(|| {
-                                UsageError::new(format!("flag '{shown}' is missing its value"))
-                            });
+                    Some(p) => {
+                        // A value flag takes the next argument verbatim, whatever it looks like.
+                        let value = match inline {
+                            Some(v) => Some(v.to_owned()),
+                            None => args.get(i + 1).cloned().inspect(|_| i += 1),
+                        };
+                        match value {
+                            Some(v) => match &mut raw[p] {
+                                Raw::Values(values) if spec.params[p].repeatable => values.push(v),
+                                slot => *slot = Raw::Values(vec![v]),
+                            },
+                            None => {
+                                pending.get_or_insert_with(|| {
+                                    UsageError::new(format!("flag '{shown}' is missing its value"))
+                                });
+                            }
                         }
                     }
                 }
@@ -762,11 +818,11 @@ mod tests {
     }
 
     #[test]
-    fn short_forms_other_than_dash_x_are_unknown_flags() {
-        assert_eq!(build_err(&["t", "-j8"]), "unknown flag '-j8'");
+    fn short_forms_other_than_dash_x_are_rejected() {
+        let bundle = "flag '-j' takes a value, so it must be last in a bundle";
+        assert_eq!(build_err(&["t", "-j8"]), bundle);
+        assert_eq!(build_err(&["t", "-jf"]), bundle);
         assert_eq!(build_err(&["t", "-j=8"]), "unknown flag '-j=8'");
-        assert_eq!(build_err(&["t", "-jf"]), "unknown flag '-jf'");
-        assert_eq!(build_err(&["t", "-ff"]), "unknown flag '-ff'");
         assert_eq!(build_err(&["t", "-x"]), "unknown flag '-x'");
         assert_eq!(build_err(&["t", "-J", "1"]), "unknown flag '-J'");
     }
@@ -783,7 +839,10 @@ mod tests {
     fn short_name_is_not_a_long_name() {
         assert_eq!(build_err(&["t", "--j", "1"]), "unknown flag '--j'");
         assert_eq!(build_err(&["t", "--f"]), "unknown flag '--f'");
-        assert_eq!(build_err(&["t", "-jobs"]), "unknown flag '-jobs'");
+        assert_eq!(
+            build_err(&["t", "-jobs"]),
+            "flag '-j' takes a value, so it must be last in a bundle"
+        );
     }
 
     #[test]
@@ -1058,6 +1117,96 @@ mod flag_form_tests {
         assert_eq!(
             neg(&["x", "--no-to"]).unwrap_err(),
             "unknown flag '--no-to'"
+        );
+    }
+
+    // to (positional), -r and -f (switches), -j (value flag).
+    static BUN_PARAMS: [ParamSpec; 4] = [
+        positional("to"),
+        with_short(switch("recursive", "recursive"), 'r'),
+        with_short(switch("force", "force"), 'f'),
+        with_short(flag("jobs", "jobs"), 'j'),
+    ];
+    static BUN: CommandSpec = CommandSpec {
+        path: &["rm"],
+        aliases: &[],
+        doc: "",
+        params: &BUN_PARAMS,
+        version: Some("1.0.0"),
+    };
+
+    fn bun(a: &[&str]) -> Result<Outcome, String> {
+        parse(&BUN, &args(a), &|_| None).map_err(|e| e.to_string())
+    }
+
+    fn bun_run(a: &[&str]) -> Parsed {
+        match bun(a) {
+            Ok(Outcome::Run(p)) => p,
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    const NOT_LAST: &str = "flag '-j' takes a value, so it must be last in a bundle";
+
+    #[test]
+    fn short_switches_bundle() {
+        let p = bun_run(&["-rf", "x"]);
+        assert_eq!(state(&p, 1), Some(true));
+        assert_eq!(state(&p, 2), Some(true));
+        assert_eq!(p.get::<String>(0).unwrap(), "x");
+        let p = bun_run(&["-fr", "x", "-rr"]);
+        assert_eq!(state(&p, 1), Some(true));
+    }
+
+    #[test]
+    fn the_last_flag_of_a_bundle_may_take_the_next_argument() {
+        let p = bun_run(&["-fj", "8", "x"]);
+        assert_eq!(state(&p, 2), Some(true));
+        assert_eq!(p.get::<u8>(3).unwrap(), 8);
+        assert_eq!(p.get::<String>(0).unwrap(), "x");
+        // Verbatim, like any value flag.
+        let p = bun_run(&["x", "-rj", "-5"]);
+        assert_eq!(p.get::<i8>(3).unwrap(), -5);
+    }
+
+    #[test]
+    fn a_value_flag_must_be_last_in_a_bundle() {
+        assert_eq!(bun(&["x", "-jf", "8"]).unwrap_err(), NOT_LAST);
+        assert_eq!(bun(&["x", "-rjf", "8"]).unwrap_err(), NOT_LAST);
+        assert_eq!(bun(&["x", "-j8"]).unwrap_err(), NOT_LAST);
+    }
+
+    #[test]
+    fn a_bundle_with_a_missing_value_or_unknown_letter() {
+        assert_eq!(
+            bun(&["x", "-rj"]).unwrap_err(),
+            "flag '-j' is missing its value"
+        );
+        assert_eq!(bun(&["x", "-rq"]).unwrap_err(), "unknown flag '-q'");
+        assert_eq!(bun(&["x", "-qr"]).unwrap_err(), "unknown flag '-q'");
+        assert_eq!(bun(&["x", "-5"]).unwrap_err(), "unknown flag '-5'");
+        assert_eq!(
+            bun(&["x", "-r=true"]).unwrap_err(),
+            "unknown flag '-r=true'"
+        );
+    }
+
+    #[test]
+    fn help_and_version_may_sit_in_a_bundle() {
+        assert!(matches!(bun(&["x", "-rh"]), Ok(Outcome::Help)));
+        assert!(matches!(bun(&["x", "-fV"]), Ok(Outcome::Version)));
+        // But not after a value flag that swallows the rest, or after `--`.
+        assert!(matches!(bun(&["-j", "-h", "x"]), Ok(Outcome::Run(_))));
+        assert!(matches!(bun(&["--", "-rh"]), Ok(Outcome::Run(_))));
+    }
+
+    #[test]
+    fn a_lone_dash_and_double_dash_are_not_bundles() {
+        assert_eq!(bun_run(&["-"]).get::<String>(0).unwrap(), "-");
+        assert_eq!(bun_run(&["--", "-rf"]).get::<String>(0).unwrap(), "-rf");
+        assert_eq!(
+            bun_run(&["-r", "--", "-odd"]).get::<String>(0).unwrap(),
+            "-odd"
         );
     }
 

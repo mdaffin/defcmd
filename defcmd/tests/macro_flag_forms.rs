@@ -223,3 +223,16 @@ fn bad_switch_value_names_the_switch() {
         "invalid value 'yes' for '--links': expected bool",
     );
 }
+
+#[test]
+fn short_switches_bundle_and_the_last_may_take_a_value() {
+    ok(
+        &["app", "-c", "-x", "p"],
+        "to=None retries=None exclude=[\"p\"] dirs=[] name=None color=true links=None quiet=false no_cache=false",
+    );
+    usage_error(
+        &["app", "-xc", "p"],
+        "flag '-x' takes a value, so it must be last in a bundle",
+    );
+    usage_error(&["app", "-cq"], "unknown flag '-q'");
+}
