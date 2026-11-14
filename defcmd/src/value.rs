@@ -70,6 +70,10 @@ impl FromArg for OsString {
         Ok(arg.to_owned())
     }
 
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
     fn display_arg(&self) -> Option<String> {
         Some(format!("'{}'", self.to_string_lossy()))
     }
@@ -144,6 +148,50 @@ macro_rules! int_from_arg {
 int_from_arg!(
     i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
 );
+
+impl FromArg for char {
+    fn from_arg(arg: &OsStr) -> Result<Self, ArgError> {
+        let mut chars = arg
+            .to_str()
+            .ok_or_else(|| ArgError::new("expected a single character"))?
+            .chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => Ok(c),
+            _ => Err(ArgError::new("expected a single character")),
+        }
+    }
+
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn display_arg(&self) -> Option<String> {
+        Some(format!("'{self}'"))
+    }
+}
+
+macro_rules! float_from_arg {
+    ($($t:ty),* $(,)?) => {$(
+        impl FromArg for $t {
+            fn from_arg(arg: &OsStr) -> Result<Self, ArgError> {
+                arg.to_str()
+                    .map(|s| s.replace('_', ""))
+                    .and_then(|s| s.parse::<$t>().ok())
+                    .ok_or_else(|| ArgError::new("expected float"))
+            }
+
+            fn type_name() -> String {
+                "float".to_string()
+            }
+
+            fn display_arg(&self) -> Option<String> {
+                Some(self.to_string())
+            }
+        }
+    )*};
+}
+
+float_from_arg!(f32, f64);
 
 #[cfg(test)]
 mod tests {
@@ -309,5 +357,78 @@ mod tests {
         assert_eq!(String::type_name(), "string");
         assert_eq!(MyThing.display_arg(), None);
         assert!(MyThing::possible_values().is_empty());
+    }
+
+    #[test]
+    fn floats_accept_rust_syntax_and_underscores() {
+        for (input, want) in [
+            (".5", 0.5),
+            ("5.", 5.0),
+            ("1e3", 1000.0),
+            ("1E3", 1000.0),
+            ("+1.5", 1.5),
+            ("-2.5", -2.5),
+            ("7", 7.0),
+            ("1_000.5", 1000.5),
+            ("1_0e1_0", 1e11),
+        ] {
+            assert_eq!(f64::from_arg(os(input)).unwrap(), want, "input {input:?}");
+        }
+        assert_eq!(f32::from_arg(os("1.5")).unwrap(), 1.5f32);
+        assert_eq!(f64::from_arg(os("inf")).unwrap(), f64::INFINITY);
+        assert_eq!(f64::from_arg(os("-inf")).unwrap(), f64::NEG_INFINITY);
+        assert!(f64::from_arg(os("nan")).unwrap().is_nan());
+    }
+
+    #[test]
+    fn floats_reject_other_spellings() {
+        for bad in [
+            "", "_", "abc", "1.2.3", " 1", "1 ", "--1", "1e", "0x10", "١",
+        ] {
+            let err = f64::from_arg(os(bad)).unwrap_err();
+            assert_eq!(err.to_string(), "expected float", "input {bad:?}");
+        }
+        let err = f32::from_arg(OsStr::from_bytes(b"1\xff")).unwrap_err();
+        assert_eq!(err.to_string(), "expected float");
+    }
+
+    #[test]
+    fn floats_are_called_float_and_display_bare() {
+        assert_eq!(f32::type_name(), "float");
+        assert_eq!(f64::type_name(), "float");
+        assert_eq!(1.5f64.display_arg().as_deref(), Some("1.5"));
+        assert_eq!(2f32.display_arg().as_deref(), Some("2"));
+        assert!(f64::possible_values().is_empty());
+    }
+
+    #[test]
+    fn char_takes_exactly_one_character() {
+        assert_eq!(char::from_arg(os("x")).unwrap(), 'x');
+        assert_eq!(char::from_arg(os("é")).unwrap(), 'é');
+        assert_eq!(char::from_arg(os("-")).unwrap(), '-');
+        for bad in ["", "ab", "  "] {
+            let err = char::from_arg(os(bad)).unwrap_err();
+            assert_eq!(err.to_string(), "expected a single character", "{bad:?}");
+        }
+        assert!(char::from_arg(OsStr::from_bytes(b"\xff")).is_err());
+    }
+
+    #[test]
+    fn char_is_a_string_shown_single_quoted() {
+        assert_eq!(char::type_name(), "string");
+        assert_eq!(','.display_arg().as_deref(), Some("','"));
+    }
+
+    #[test]
+    fn os_string_is_called_string() {
+        assert_eq!(OsString::type_name(), "string");
+        assert_eq!(String::type_name(), "string");
+    }
+
+    #[test]
+    fn os_string_keeps_non_utf8_and_string_rejects_it() {
+        let raw = OsStr::from_bytes(b"\xfe\xff");
+        assert_eq!(OsString::from_arg(raw).unwrap().as_bytes(), b"\xfe\xff");
+        assert!(String::from_arg(raw).is_err());
     }
 }
