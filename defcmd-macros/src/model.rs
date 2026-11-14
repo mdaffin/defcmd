@@ -1,7 +1,8 @@
 //! A parsed view of a `#[command]` function: its doc comments and parameters.
 
 use syn::ext::IdentExt;
-use syn::{Attribute, Expr, ExprLit, FnArg, Ident, ItemFn, Lit, Meta, Pat, Type};
+use syn::parse::ParseStream;
+use syn::{Attribute, Expr, ExprLit, FnArg, Ident, ItemFn, Lit, LitInt, Meta, Pat, Token, Type};
 
 /// How a parameter's type is treated, decided syntactically by the last path segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +20,12 @@ pub struct Param {
     pub doc: String,
     /// Marked `#[flag]`.
     pub flag: bool,
+    /// The long name given in `#[flag(--long)]`; the derived name is used when `None`.
+    pub explicit_long: Option<String>,
+    /// The short name given in `#[flag(-x)]`.
+    pub short: Option<char>,
+    /// The expression of `#[default(expr)]`.
+    pub default: Option<Expr>,
     pub ty: Type,
     pub kind: TypeKind,
 }
@@ -61,6 +68,76 @@ pub fn classify(ty: &Type) -> TypeKind {
     }
 }
 
+/// The names given in `#[flag(..)]`.
+#[derive(Default)]
+struct FlagNames {
+    long: Option<String>,
+    short: Option<char>,
+}
+
+/// One word of a flag name: an identifier (keywords allowed) or an integer.
+fn name_word(input: ParseStream) -> syn::Result<String> {
+    if input.peek(LitInt) {
+        let lit: LitInt = input.parse()?;
+        Ok(lit.to_string())
+    } else {
+        Ok(Ident::parse_any(input)?.unraw().to_string())
+    }
+}
+
+/// Parses the arguments of `#[flag(..)]`: `-x`, `--long` and `--long-name`, comma separated, at
+/// most one of each. `-x` and `--long` are not Rust expressions, so the tokens are read by hand.
+fn parse_flag_names(input: ParseStream) -> syn::Result<FlagNames> {
+    let mut names = FlagNames::default();
+    while !input.is_empty() {
+        let first: Token![-] = input.parse()?;
+        if input.peek(Token![-]) {
+            input.parse::<Token![-]>()?;
+            let start = input.span();
+            let mut long = name_word(input)?;
+            while input.peek(Token![-]) {
+                input.parse::<Token![-]>()?;
+                long.push('-');
+                long.push_str(&name_word(input)?);
+            }
+            let valid = long.starts_with(|c: char| c.is_ascii_alphabetic())
+                && long.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+            if !valid {
+                return Err(syn::Error::new(
+                    start,
+                    "a long flag name is ASCII letters, digits and hyphens, starting with a letter",
+                ));
+            }
+            if names.long.replace(long).is_some() {
+                return Err(syn::Error::new(start, "a flag has only one long name"));
+            }
+        } else {
+            let start = input.span();
+            let word = name_word(input)?;
+            let mut chars = word.chars();
+            let short = match (chars.next(), chars.next()) {
+                (Some(c), None) if c.is_ascii_alphanumeric() => c,
+                _ => {
+                    return Err(syn::Error::new(
+                        start,
+                        "a short flag name is exactly one ASCII letter or digit",
+                    ));
+                }
+            };
+            if names.short.replace(short).is_some() {
+                return Err(syn::Error::new_spanned(
+                    first,
+                    "a flag has only one short name",
+                ));
+            }
+        }
+        if !input.is_empty() {
+            input.parse::<Token![,]>()?;
+        }
+    }
+    Ok(names)
+}
+
 impl Command {
     pub fn from_fn(f: &ItemFn) -> syn::Result<Command> {
         let mut params = Vec::new();
@@ -75,11 +152,39 @@ impl Command {
                 ));
             };
             let mut flag = false;
+            let mut names = FlagNames::default();
+            let mut default = None;
             for attr in &pat_type.attrs {
                 if attr.path().is_ident("doc") {
                     continue;
                 }
-                if !attr.path().is_ident("flag") {
+                if attr.path().is_ident("flag") {
+                    if flag {
+                        return Err(syn::Error::new_spanned(attr, "duplicate `#[flag]`"));
+                    }
+                    flag = true;
+                    names = match &attr.meta {
+                        Meta::Path(_) => FlagNames::default(),
+                        Meta::List(_) => attr.parse_args_with(parse_flag_names)?,
+                        Meta::NameValue(_) => {
+                            return Err(syn::Error::new_spanned(
+                                attr,
+                                "use `#[flag]` or `#[flag(-x, --long)]`",
+                            ));
+                        }
+                    };
+                } else if attr.path().is_ident("default") {
+                    if default.is_some() {
+                        return Err(syn::Error::new_spanned(attr, "duplicate `#[default]`"));
+                    }
+                    let Meta::List(_) = &attr.meta else {
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "`#[default]` needs a value: `#[default(expr)]`",
+                        ));
+                    };
+                    default = Some(attr.parse_args::<Expr>()?);
+                } else {
                     let name = attr
                         .path()
                         .get_ident()
@@ -89,19 +194,15 @@ impl Command {
                         format!("unknown parameter attribute `{name}`"),
                     ));
                 }
-                if !matches!(attr.meta, Meta::Path(_)) {
-                    return Err(syn::Error::new_spanned(
-                        attr,
-                        "`#[flag]` arguments are not supported yet",
-                    ));
-                }
-                flag = true;
             }
             params.push(Param {
                 ident: pat.ident.clone(),
                 name: pat.ident.unraw().to_string(),
                 doc: doc_of(&pat_type.attrs),
                 flag,
+                explicit_long: names.long,
+                short: names.short,
+                default,
                 ty: (*pat_type.ty).clone(),
                 kind: classify(&pat_type.ty),
             });
@@ -247,11 +348,128 @@ mod tests {
         );
     }
 
+    fn names(f: ItemFn) -> (Option<String>, Option<char>) {
+        let p = &command(f).params[0];
+        (p.explicit_long.clone(), p.short)
+    }
+
     #[test]
-    fn rejects_flag_with_arguments_for_now() {
+    fn flag_names_in_every_form() {
+        let none = (None, None);
+        assert_eq!(names(parse_quote! { fn main(#[flag] x: bool) {} }), none);
         assert_eq!(
-            error(parse_quote! { fn main(#[flag(-f)] x: bool) {} }),
-            "`#[flag]` arguments are not supported yet"
+            names(parse_quote! { fn main(#[flag(-f)] x: bool) {} }),
+            (None, Some('f'))
+        );
+        assert_eq!(
+            names(parse_quote! { fn main(#[flag(--jobs)] x: bool) {} }),
+            (Some("jobs".into()), None)
+        );
+        assert_eq!(
+            names(parse_quote! { fn main(#[flag(--jobs, -j)] x: bool) {} }),
+            (Some("jobs".into()), Some('j'))
+        );
+        assert_eq!(
+            names(parse_quote! { fn main(#[flag(-j, --jobs,)] x: bool) {} }),
+            (Some("jobs".into()), Some('j'))
+        );
+    }
+
+    #[test]
+    fn hyphenated_and_keyword_long_names() {
+        let long = |f: ItemFn| names(f).0.unwrap();
+        assert_eq!(
+            long(parse_quote! { fn main(#[flag(--dry-run)] x: bool) {} }),
+            "dry-run"
+        );
+        assert_eq!(
+            long(parse_quote! { fn main(#[flag(--no-color-at-all)] x: bool) {} }),
+            "no-color-at-all"
+        );
+        assert_eq!(
+            long(parse_quote! { fn main(#[flag(--type)] x: bool) {} }),
+            "type"
+        );
+        assert_eq!(
+            long(parse_quote! { fn main(#[flag(--utf-8)] x: bool) {} }),
+            "utf-8"
+        );
+    }
+
+    #[test]
+    fn bad_flag_names_are_errors() {
+        let long = "a long flag name is ASCII letters, digits and hyphens, starting with a letter";
+        let short = "a short flag name is exactly one ASCII letter or digit";
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(-ab)] x: bool) {} }),
+            short
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(-é)] x: bool) {} }),
+            short
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(--é)] x: bool) {} }),
+            long
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(--r#a_b)] x: bool) {} }),
+            long
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(--9a)] x: bool) {} }),
+            long
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(-a, -b)] x: bool) {} }),
+            "a flag has only one short name"
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(--a, --b)] x: bool) {} }),
+            "a flag has only one long name"
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(-a --b)] x: bool) {} }),
+            "expected `,`"
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(a)] x: bool) {} }),
+            "expected `-`"
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag = "x"] x: bool) {} }),
+            "use `#[flag]` or `#[flag(-x, --long)]`"
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag] #[flag] x: bool) {} }),
+            "duplicate `#[flag]`"
+        );
+    }
+
+    #[test]
+    fn default_keeps_its_expression() {
+        let c = command(parse_quote! {
+            fn main(#[flag] #[default(1 + 2)] n: u8, #[default("x")] s: String, t: String) {}
+        });
+        let shown = |p: &Param| p.default.as_ref().map(|e| quote::quote!(#e).to_string());
+        assert_eq!(shown(&c.params[0]).as_deref(), Some("1 + 2"));
+        assert_eq!(shown(&c.params[1]).as_deref(), Some("\"x\""));
+        assert!(c.params[2].default.is_none());
+    }
+
+    #[test]
+    fn bad_default_attributes_are_errors() {
+        assert_eq!(
+            error(parse_quote! { fn main(#[default] x: u8) {} }),
+            "`#[default]` needs a value: `#[default(expr)]`"
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[default = 1] x: u8) {} }),
+            "`#[default]` needs a value: `#[default(expr)]`"
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[default(1)] #[default(2)] x: u8) {} }),
+            "duplicate `#[default]`"
         );
     }
 }
