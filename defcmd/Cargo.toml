@@ -14,6 +14,11 @@ inventory = "0.3"
 name = "conf"
 path = "examples/errors.rs"
 
+# Same for `todo`, the program name in `examples/nushell_style.rs`.
+[[example]]
+name = "todo"
+path = "examples/nushell_style.rs"
+
 [lints.clippy]
 # `examples/errors.rs` is a verbatim copy of the documented example, which is not edited.
 doc_overindented_list_items = "allow"

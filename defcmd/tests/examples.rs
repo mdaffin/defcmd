@@ -315,3 +315,148 @@ Parameters:
         );
     }
 }
+
+mod todo {
+    use super::run;
+
+    fn todo(args: &[&str]) -> super::Run {
+        run("todo", "todo", args)
+    }
+
+    fn ok(args: &[&str], stdout: &str) {
+        let r = todo(args);
+        assert_eq!(
+            (r.code, r.stdout.as_str(), r.stderr.as_str()),
+            (0, stdout, ""),
+            "{args:?}"
+        );
+    }
+
+    fn usage_error(args: &[&str], message: &str) {
+        let r = todo(args);
+        assert_eq!(r.code, 2, "{args:?}");
+        assert_eq!(r.stdout, "", "{args:?}");
+        assert!(
+            r.stderr.starts_with(&format!("Error: {message}\n")),
+            "{args:?}: {}",
+            r.stderr
+        );
+    }
+
+    const ROOT_HELP: &str = "\
+A tiny todo list.
+
+Usage:
+  > todo {flags}
+
+Subcommands:
+  todo add - Add an item.
+  todo list - List items.
+  todo remote add - Add a remote list.
+  todo remote remove - Remove a remote list.
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+  -v, --verbose: Print extra detail.
+";
+
+    const ADD_HELP: &str = "\
+Add an item.
+
+Usage:
+  > todo add {flags} <title>
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+  -p, --priority <int>: 1 (low) to 3 (high). (default: 1)
+
+Parameters:
+  title <string>: What needs doing.
+";
+
+    const REMOTE_HELP: &str = "\
+Usage:
+  > todo remote
+
+Subcommands:
+  todo remote add - Add a remote list.
+  todo remote remove - Remove a remote list.
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+";
+
+    #[test]
+    fn no_subcommand_runs_main() {
+        ok(&[], "todo (verbose=false); try `todo --help`\n");
+        ok(&["-v"], "todo (verbose=true); try `todo --help`\n");
+    }
+
+    #[test]
+    fn add_takes_a_title_and_a_priority() {
+        ok(&["add", "buy milk"], "add \"buy milk\" priority=1\n");
+        ok(
+            &["add", "buy milk", "-p", "2"],
+            "add \"buy milk\" priority=2\n",
+        );
+        ok(&["add", "--priority", "3", "x"], "add \"x\" priority=3\n");
+    }
+
+    #[test]
+    fn list_takes_all() {
+        ok(&["list"], "list all=false\n");
+        ok(&["list", "--all"], "list all=true\n");
+    }
+
+    #[test]
+    fn nested_commands() {
+        ok(
+            &["remote", "add", "origin", "https://example.com/repo"],
+            "remote add origin https://example.com/repo\n",
+        );
+        ok(&["remote", "remove", "origin"], "remote remove origin\n");
+    }
+
+    #[test]
+    fn a_group_prints_its_help_and_exits_2() {
+        let r = todo(&["remote"]);
+        assert_eq!(
+            (r.code, r.stdout.as_str(), r.stderr.as_str()),
+            (2, REMOTE_HELP, "")
+        );
+    }
+
+    #[test]
+    fn the_roots_flags_come_before_the_subcommand() {
+        ok(&["--verbose", "list"], "list all=false\n");
+        usage_error(&["list", "--verbose"], "unknown flag '--verbose'");
+    }
+
+    #[test]
+    fn an_unknown_word_is_unexpected() {
+        usage_error(&["nosuch"], "unexpected argument 'nosuch'");
+        usage_error(&["remote", "nosuch"], "unexpected argument 'nosuch'");
+    }
+
+    #[test]
+    fn after_double_dash_the_word_is_a_positional() {
+        usage_error(&["--", "list"], "unexpected argument 'list'");
+    }
+
+    #[test]
+    fn golden_help() {
+        ok(&["--help"], ROOT_HELP);
+        ok(&["add", "--help"], ADD_HELP);
+        ok(&["remote", "--help"], REMOTE_HELP);
+    }
+
+    #[test]
+    fn help_follows_the_flags_it_comes_after() {
+        ok(&["--help", "list"], ROOT_HELP);
+        let r = todo(&["list", "--help"]);
+        assert!(r.stdout.starts_with("List items.\n"), "{}", r.stdout);
+    }
+}
