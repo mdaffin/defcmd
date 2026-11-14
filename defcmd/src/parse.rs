@@ -88,6 +88,45 @@ struct Use<'a> {
     not_last: bool,
 }
 
+/// Where the flags named in an argument are found: a global flag of the root first, then one of
+/// the command's own.
+struct Lookup {
+    spec: &'static CommandSpec,
+    globals: &'static [ParamSpec],
+}
+
+impl Lookup {
+    /// The first flag, global before own, that `fits`. An own flag that is itself marked global
+    /// only repeats a root flag to read its value, so it is never the target.
+    fn find(&self, fits: impl Fn(&ParamSpec) -> bool) -> Option<Target> {
+        let fits = |p: &ParamSpec| p.kind != ParamKind::Positional && fits(p);
+        (self.globals.iter())
+            .position(|p| p.global && fits(p))
+            .map(Target::Global)
+            .or_else(|| {
+                (self.spec.params.iter())
+                    .position(|p| !p.global && fits(p))
+                    .map(Target::Own)
+            })
+    }
+
+    /// The flag called `--wanted`; with `negatable_only`, one that also accepts `--no-wanted`.
+    fn by_long(&self, wanted: &str, negatable_only: bool) -> Option<Target> {
+        self.find(|p| p.long == Some(wanted) && (p.negatable || !negatable_only))
+    }
+
+    fn by_short(&self, wanted: char) -> Option<Target> {
+        self.find(|p| p.short == Some(wanted))
+    }
+
+    fn param_of(&self, t: Target) -> &'static ParamSpec {
+        match t {
+            Target::Own(i) => &self.spec.params[i],
+            Target::Global(i) => &self.globals[i],
+        }
+    }
+}
+
 /// Parse `args` (without the command word itself) against `spec`, with no global flags.
 #[cfg(test)]
 pub(crate) fn parse(
@@ -121,42 +160,7 @@ pub(crate) fn parse_with_globals(
     let mut raw = vec![Raw::Absent; spec.params.len()];
     // The first of this command's own (not global) flags that was applied.
     let mut first_own: Option<String> = None;
-    // The flag called `--wanted` (or, for `negatable_only`, a negatable one): a global flag
-    // first, then one of this command's own.
-    let by_long = |wanted: &str, negatable_only: bool| -> Option<Target> {
-        let fits = |p: &ParamSpec| {
-            p.kind != ParamKind::Positional
-                && p.long == Some(wanted)
-                && (p.negatable || !negatable_only)
-        };
-        globals
-            .iter()
-            .position(|p| p.global && fits(p))
-            .map(Target::Global)
-            .or_else(|| {
-                (spec.params.iter())
-                    .position(|p| !p.global && fits(p))
-                    .map(Target::Own)
-            })
-    };
-    let by_short = |wanted: char| -> Option<Target> {
-        let fits = |p: &ParamSpec| p.kind != ParamKind::Positional && p.short == Some(wanted);
-        globals
-            .iter()
-            .position(|p| p.global && fits(p))
-            .map(Target::Global)
-            .or_else(|| {
-                (spec.params.iter())
-                    .position(|p| !p.global && fits(p))
-                    .map(Target::Own)
-            })
-    };
-    let param_of = |t: Target| -> &'static ParamSpec {
-        match t {
-            Target::Own(i) => &spec.params[i],
-            Target::Global(i) => &globals[i],
-        }
-    };
+    let look = Lookup { spec, globals };
     let mut taken = 0;
     // The first error found. Parsing goes on so that a later `--help` can still win.
     let mut pending: Option<UsageError> = None;
@@ -219,7 +223,7 @@ pub(crate) fn parse_with_globals(
                 if inline.is_none() && name == "version" && spec.version.is_some() {
                     return Ok(Outcome::Version);
                 }
-                let mut found = by_long(&name, false);
+                let mut found = look.by_long(&name, false);
                 let mut negated = false;
                 // `--no-x` is the negation of a negatable `x`, unless a switch is really
                 // called `--no-x`. A negation takes no `=value`.
@@ -227,7 +231,7 @@ pub(crate) fn parse_with_globals(
                     && inline.is_none()
                     && let Some(base) = name.strip_prefix("no-")
                 {
-                    found = by_long(base, true);
+                    found = look.by_long(base, true);
                     negated = found.is_some();
                 }
                 uses.push(Use {
@@ -261,7 +265,7 @@ pub(crate) fn parse_with_globals(
                     });
                 }
                 for (k, &c) in letters.iter().enumerate() {
-                    let found = by_short(c);
+                    let found = look.by_short(c);
                     if found.is_none() && c == 'h' {
                         return Ok(Outcome::Help);
                     }
@@ -269,7 +273,7 @@ pub(crate) fn parse_with_globals(
                         return Ok(Outcome::Version);
                     }
                     let not_last = k + 1 < letters.len()
-                        && found.is_some_and(|t| param_of(t).kind == ParamKind::Flag);
+                        && found.is_some_and(|t| look.param_of(t).kind == ParamKind::Flag);
                     uses.push(Use {
                         found,
                         shown: format!("-{c}"),
@@ -301,7 +305,7 @@ pub(crate) fn parse_with_globals(
                         });
                     }
                     Some(target) => {
-                        let param = param_of(target);
+                        let param = look.param_of(target);
                         let slot = match target {
                             Target::Own(p) => &mut raw[p],
                             Target::Global(p) => &mut store[p],
