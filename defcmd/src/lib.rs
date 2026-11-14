@@ -1,7 +1,10 @@
 // Lets generated code and in-crate tests refer to this crate as `::defcmd`.
 extern crate self as defcmd;
 
+mod value;
+
 pub use defcmd_macros::command;
+pub use value::{ArgError, FromArg};
 
 /// Items used by generated code. Not part of the public API.
 #[doc(hidden)]
