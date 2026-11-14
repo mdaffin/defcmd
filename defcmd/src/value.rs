@@ -303,7 +303,7 @@ impl FromArg for Duration {
         let (name, unit_ns) = DURATION_UNITS
             .iter()
             .filter(|(name, _)| *name != "µs")
-            .find(|(_, unit_ns)| total.is_multiple_of(*unit_ns))
+            .find(|(_, unit_ns)| total % *unit_ns == 0)
             .copied()
             .unwrap_or(("ns", 1));
         Some(format!("{}{name}", total / unit_ns))
