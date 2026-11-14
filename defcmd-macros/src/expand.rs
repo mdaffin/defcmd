@@ -239,6 +239,7 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
     let optional = is_optional(p);
     let rest = is_rest(p);
     let repeatable = p.flag && p.kind == TypeKind::Vec;
+    let global = p.global;
     let negatable = is_tri_state(p) || (p.flag && p.kind == TypeKind::Bool && p.default.is_some());
     let (kind, long) = if p.flag {
         let long = long_name(p);
@@ -286,7 +287,7 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
             rest: #rest,
             repeatable: #repeatable,
             negatable: #negatable,
-            global: false,
+            global: #global,
         }
     }
 }

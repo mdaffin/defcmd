@@ -37,6 +37,8 @@ pub struct Param {
     pub explicit_long: Option<String>,
     /// The short name given in `#[flag(-x)]`.
     pub short: Option<char>,
+    /// Marked `#[flag(global)]`.
+    pub global: bool,
     /// The expression of `#[default(expr)]`.
     pub default: Option<Expr>,
     pub ty: Type,
@@ -101,6 +103,7 @@ pub fn inner_type(ty: &Type) -> Option<&Type> {
 struct FlagNames {
     long: Option<String>,
     short: Option<char>,
+    global: bool,
 }
 
 /// One word of a flag name: an identifier (keywords allowed) or an integer.
@@ -122,11 +125,23 @@ pub fn valid_long_name(long: &str) -> bool {
         && long.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// Parses the arguments of `#[flag(..)]`: `-x`, `--long` and `--long-name`, comma separated, at
-/// most one of each. `-x` and `--long` are not Rust expressions, so the tokens are read by hand.
+/// Parses the arguments of `#[flag(..)]`: `global`, `-x`, `--long` and `--long-name`, comma
+/// separated, at most one of each. `-x` and `--long` are not Rust expressions, so the tokens are
+/// read by hand.
 fn parse_flag_names(input: ParseStream) -> syn::Result<FlagNames> {
     let mut names = FlagNames::default();
     while !input.is_empty() {
+        // `global` is the one bare word: `#[flag(global)]`, `#[flag(global, -v, --verbose)]`.
+        if input.peek(Ident) && input.fork().parse::<Ident>()? == "global" {
+            let word: Ident = input.parse()?;
+            if std::mem::replace(&mut names.global, true) {
+                return Err(syn::Error::new(word.span(), "a flag is global only once"));
+            }
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
+            continue;
+        }
         let first: Token![-] = input.parse()?;
         if input.peek(Token![-]) {
             input.parse::<Token![-]>()?;
@@ -295,6 +310,7 @@ impl Command {
                 rest,
                 explicit_long: names.long,
                 short: names.short,
+                global: names.global,
                 default,
                 ty: (*pat_type.ty).clone(),
                 kind,
@@ -573,6 +589,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn global_is_a_bare_word_among_the_flag_names() {
+        let global = |f: ItemFn| command(f).params[0].global;
+        assert!(!global(parse_quote! { fn main(#[flag] x: bool) {} }));
+        assert!(global(parse_quote! { fn main(#[flag(global)] x: bool) {} }));
+        assert!(global(
+            parse_quote! { fn main(#[flag(global, -v, --verbose)] x: bool) {} }
+        ));
+        assert!(global(
+            parse_quote! { fn main(#[flag(-v, global)] x: bool) {} }
+        ));
+        assert_eq!(
+            names(parse_quote! { fn main(#[flag(-v, global, --loud)] x: bool) {} }),
+            (Some("loud".into()), Some('v'))
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(global, global)] x: bool) {} }),
+            "a flag is global only once"
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(globl)] x: bool) {} }),
+            "expected `-`"
+        );
+        assert_eq!(
+            error(parse_quote! { fn main(#[flag(global -v)] x: bool) {} }),
+            "expected `,`"
+        );
+    }
     #[test]
     fn hyphenated_and_keyword_long_names() {
         let long = |f: ItemFn| names(f).0.unwrap();
