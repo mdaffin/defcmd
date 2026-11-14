@@ -92,6 +92,9 @@
 // Lets generated code and in-crate tests refer to this crate as `::defcmd`.
 extern crate self as defcmd;
 
+#[cfg(not(unix))]
+compile_error!("defcmd supports Unix only (Linux and macOS)");
+
 mod help;
 mod output;
 mod parse;
