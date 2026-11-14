@@ -41,7 +41,6 @@ pub(crate) enum Raw {
 
 /// The raw, not yet converted, result of parsing one command's arguments.
 #[derive(Debug)]
-#[allow(dead_code)] // read by `Parsed::get` in the next step
 pub struct Parsed {
     pub(crate) spec: &'static CommandSpec,
     pub(crate) raw: Vec<Raw>,
@@ -165,6 +164,37 @@ pub fn parse(
         )));
     }
     Ok(Outcome::Run(Parsed { spec, raw }))
+}
+
+impl Parsed {
+    /// The converted value of parameter `index`, or `None` if it was not given. If it was given
+    /// more than once, the last value is used.
+    pub fn get_opt<T: FromArg>(&self, index: usize) -> Result<Option<T>, UsageError> {
+        let Raw::Values(values) = &self.raw[index] else {
+            return Ok(None);
+        };
+        let Some(value) = values.last() else {
+            return Ok(None);
+        };
+        T::from_arg(value).map(Some).map_err(|e| {
+            let name = self.spec.params[index].display_name();
+            // A value that is not UTF-8 cannot be quoted back faithfully, so it is left out.
+            match value.to_str() {
+                Some(text) => UsageError::new(format!("invalid value '{text}' for '{name}': {e}")),
+                None => UsageError::new(format!("invalid value for '{name}': {e}")),
+            }
+        })
+    }
+
+    /// Like [`Parsed::get_opt`], but a missing value is a usage error.
+    pub fn get<T: FromArg>(&self, index: usize) -> Result<T, UsageError> {
+        self.get_opt(index)?.ok_or_else(|| {
+            UsageError::new(format!(
+                "missing required argument '{}'",
+                self.spec.params[index].name
+            ))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -465,5 +495,77 @@ mod tests {
         let child = |w: &OsStr| (w == "list").then_some(7);
         let out = parse(&COPY, &args(&["--help", "list"]), &child).unwrap();
         assert!(matches!(out, Outcome::Help));
+    }
+
+    fn raw_parsed(a: &[&str]) -> Parsed {
+        match parse(&COPY, &args(a), &no_child).unwrap() {
+            Outcome::Run(p) => p,
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_converts_strings_and_bools() {
+        let p = raw_parsed(&["a", "b", "--force"]);
+        assert_eq!(p.get::<String>(0).unwrap(), "a");
+        assert!(p.get::<bool>(1).unwrap());
+        assert_eq!(p.get::<String>(2).unwrap(), "b");
+    }
+
+    #[test]
+    fn get_opt_is_none_when_absent() {
+        let p = raw_parsed(&["a", "b"]);
+        assert_eq!(p.get_opt::<bool>(1).unwrap(), None);
+        assert_eq!(p.get_opt::<String>(0).unwrap(), Some("a".to_string()));
+    }
+
+    #[test]
+    fn get_on_an_absent_value_is_missing() {
+        let p = raw_parsed(&["a", "b"]);
+        assert_eq!(
+            p.get::<bool>(3).unwrap_err().to_string(),
+            "missing required argument 'dry_run'"
+        );
+    }
+
+    #[test]
+    fn bad_positional_value_names_the_parameter() {
+        let p = raw_parsed(&["a", "maybe"]);
+        assert_eq!(
+            p.get::<bool>(2).unwrap_err().to_string(),
+            "invalid value 'maybe' for 'to': expected bool"
+        );
+    }
+
+    #[test]
+    fn bad_flag_value_names_the_flag() {
+        // `--dry-run` was validated as a bool, so ask for a different type to force an error.
+        struct Never;
+        impl FromArg for Never {
+            fn from_arg(_: &OsStr) -> Result<Self, crate::ArgError> {
+                Err(crate::ArgError::new("expected never"))
+            }
+        }
+        let p = raw_parsed(&["a", "b", "--dry-run"]);
+        assert_eq!(
+            p.get::<Never>(3).err().unwrap().to_string(),
+            "invalid value 'true' for '--dry-run': expected never"
+        );
+    }
+
+    #[test]
+    fn non_utf8_value_omits_the_value() {
+        use std::os::unix::ffi::OsStringExt;
+        let bad = OsString::from_vec(b"a\xffb".to_vec());
+        let p = match parse(&COPY, &[bad, "b".into()], &no_child).unwrap() {
+            Outcome::Run(p) => p,
+            other => panic!("expected Run, got {other:?}"),
+        };
+        assert_eq!(
+            p.get::<String>(0).unwrap_err().to_string(),
+            "invalid value for 'from': not valid UTF-8"
+        );
+        // An OsString does not care.
+        assert!(p.get::<OsString>(0).is_ok());
     }
 }
