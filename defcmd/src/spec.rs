@@ -1,6 +1,11 @@
 //! Static descriptors the macro emits for each command. Everything here is `const`-constructible
 //! so generated code can place it in a `static`.
 
+use std::io::Write;
+use std::process::ExitCode;
+
+use crate::parse::{Parsed, UsageError};
+
 /// What kind of parameter a [`ParamSpec`] describes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamKind {
@@ -46,6 +51,17 @@ pub struct CommandSpec {
     /// The crate version, if `--version` / `-V` is generated for this command.
     pub version: Option<&'static str>,
 }
+
+/// What `#[command]` submits to the registry: the descriptor and the glue that converts the
+/// parsed values, calls the user's function and reports its result.
+pub struct Registration {
+    pub spec: &'static CommandSpec,
+    /// Runs the command. `Err` is a usage error found while converting values; the `Ok` code is
+    /// the exit code. Anything the command's result needs to report goes to the writer.
+    pub run: fn(&Parsed, &mut dyn Write) -> Result<ExitCode, UsageError>,
+}
+
+inventory::collect!(Registration);
 
 #[cfg(test)]
 mod tests {
