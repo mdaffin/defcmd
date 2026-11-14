@@ -240,9 +240,13 @@ pub(crate) fn parse_with_globals(
             } else {
                 // Short flags bundle (`-rf` is `-r -f`) but never take an attached value, so
                 // `-j8` and `-j=8` are a value flag that is not last.
-                let text = arg.to_string_lossy();
+                // Lossy text would show U+FFFD for the bad bytes, which cannot be quoted back
+                // faithfully, so a flag that is not UTF-8 is shown as such.
+                let text = arg
+                    .to_str()
+                    .map_or_else(|| "<not valid UTF-8>".into(), std::borrow::Cow::Borrowed);
                 // An `=` is not a flag letter: `-j=8` and `-f=false` are unknown as a whole.
-                let letters: Vec<char> = if text.contains('=') {
+                let letters: Vec<char> = if text.contains('=') || arg.to_str().is_none() {
                     Vec::new()
                 } else {
                     text[1..].chars().collect()
@@ -452,6 +456,7 @@ impl Parsed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStringExt;
     use crate::spec::ParamSpec;
     use crate::test_util::{flag, optional, positional, rest, switch, with_short};
 
@@ -569,6 +574,13 @@ mod tests {
         assert_eq!(err(&["a", "b", "--nope"]), "unknown flag '--nope'");
         assert_eq!(err(&["a", "b", "--nope=1"]), "unknown flag '--nope'");
         assert_eq!(err(&["a", "b", "-x"]), "unknown flag '-x'");
+    }
+
+    #[test]
+    fn a_short_flag_that_is_not_utf8_is_not_shown_lossily() {
+        let bad = OsString::from_vec(vec![b'-', 0xff]);
+        let e = parse(&COPY, &[bad], &no_child).unwrap_err();
+        assert_eq!(e.to_string(), "unknown flag '<not valid UTF-8>'");
     }
 
     #[test]
