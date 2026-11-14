@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 use syn::ext::IdentExt;
 use syn::{Expr, ExprLit, FnArg, ItemFn, Lit, Type};
 
-use crate::model::{Command, Param, TypeKind};
+use crate::model::{Command, Param, TypeKind, inner_type};
 
 /// Rejects parameter combinations that are not supported, so nothing is silently miscompiled.
 fn check_supported(command: &Command) -> syn::Result<()> {
@@ -15,12 +15,29 @@ fn check_supported(command: &Command) -> syn::Result<()> {
             format!("{what} is not supported yet"),
         ))
     };
+    let mut seen_optional = false;
     for p in &command.params {
+        if !p.flag {
+            if is_optional(p) {
+                seen_optional = true;
+            } else if seen_optional && p.kind != TypeKind::Vec {
+                return Err(syn::Error::new_spanned(
+                    &p.ty,
+                    "a required positional cannot follow an optional one",
+                ));
+            }
+        }
         match (p.flag, p.kind, p.default.is_some()) {
+            (false, TypeKind::Option, true) => {
+                return Err(syn::Error::new_spanned(
+                    &p.ty,
+                    "`#[default]` cannot be combined with `Option`",
+                ));
+            }
+            (false, TypeKind::Option, false) => {}
             (_, TypeKind::Option | TypeKind::Vec, _) => {
                 return unsupported(p, "this parameter type");
             }
-            (false, _, true) => return unsupported(p, "`#[default]` on a positional"),
             (true, TypeKind::Bool, true) => return unsupported(p, "`#[default]` on a switch"),
             (true, TypeKind::Other, false) => {
                 return Err(syn::Error::new_spanned(
@@ -32,6 +49,19 @@ fn check_supported(command: &Command) -> syn::Result<()> {
         }
     }
     Ok(())
+}
+
+/// A positional that may be left out: `Option<T>` or one with `#[default]`.
+fn is_optional(p: &Param) -> bool {
+    !p.flag && (p.kind == TypeKind::Option || p.default.is_some())
+}
+
+/// The type `FromArg` converts to: `T` for `Option<T>` positionals, the type itself otherwise.
+fn value_type(p: &Param) -> &Type {
+    match (p.kind, inner_type(&p.ty)) {
+        (TypeKind::Option, Some(inner)) => inner,
+        _ => &p.ty,
+    }
 }
 
 /// The name of the generated function that produces the default of parameter `index`.
@@ -77,7 +107,8 @@ fn default_fns(index: usize, p: &Param) -> Option<TokenStream> {
 fn param_spec(index: usize, p: &Param) -> TokenStream {
     let name = &p.name;
     let doc = &p.doc;
-    let ty = &p.ty;
+    let ty = value_type(p);
+    let optional = is_optional(p);
     let (kind, long) = if p.flag {
         let long = p
             .explicit_long
@@ -112,6 +143,7 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
             type_name: <#ty as ::defcmd::FromArg>::type_name,
             possible_values: <#ty as ::defcmd::FromArg>::possible_values,
             default_display: #default_display,
+            optional: #optional,
         }
     }
 }
@@ -120,7 +152,10 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
 fn convert(index: usize, p: &Param) -> TokenStream {
     let ident = &p.ident;
     let ty = &p.ty;
-    if p.default.is_some() {
+    if p.kind == TypeKind::Option && !p.flag {
+        let inner = value_type(p);
+        quote!(let #ident: #ty = __parsed.get_opt::<#inner>(#index)?;)
+    } else if p.default.is_some() {
         let make = default_fn(index);
         quote!(let #ident: #ty = __parsed.get_opt::<#ty>(#index)?.unwrap_or_else(#make);)
     } else if p.flag {
@@ -246,5 +281,38 @@ mod tests {
         assert_eq!(command_name(&parse_quote!(check)), "check");
         assert_eq!(command_name(&parse_quote!(list_all)), "list-all");
         assert_eq!(command_name(&parse_quote!(r#match)), "match");
+    }
+
+    fn rejected(f: ItemFn) -> String {
+        let command = Command::from_fn(&f).unwrap();
+        check_supported(&command).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn a_required_positional_cannot_follow_an_optional_one() {
+        let f: ItemFn = parse_quote! { fn main(a: Option<String>, b: String) {} };
+        assert_eq!(
+            rejected(f),
+            "a required positional cannot follow an optional one"
+        );
+        let f: ItemFn = parse_quote! { fn main(#[default(1)] a: u8, b: String) {} };
+        assert_eq!(
+            rejected(f),
+            "a required positional cannot follow an optional one"
+        );
+    }
+
+    #[test]
+    fn default_cannot_be_combined_with_option() {
+        let f: ItemFn = parse_quote! { fn main(#[default(None)] a: Option<String>) {} };
+        assert_eq!(rejected(f), "`#[default]` cannot be combined with `Option`");
+    }
+
+    #[test]
+    fn optional_and_default_positionals_are_supported() {
+        let f: ItemFn = parse_quote! {
+            fn main(a: String, #[default(1)] b: u8, c: Option<String>, #[flag] d: bool) {}
+        };
+        assert!(check_supported(&Command::from_fn(&f).unwrap()).is_ok());
     }
 }

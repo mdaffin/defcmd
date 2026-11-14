@@ -21,7 +21,11 @@ pub fn render_usage(spec: &CommandSpec, program: &str) -> String {
         .iter()
         .filter(|p| p.kind == ParamKind::Positional)
     {
-        line.push_str(&format!(" <{}>", p.name));
+        if p.optional {
+            line.push_str(&format!(" ({})", p.name));
+        } else {
+            line.push_str(&format!(" <{}>", p.name));
+        }
     }
     line
 }
@@ -58,8 +62,22 @@ fn flag_entry(p: &ParamSpec) -> String {
     }
 }
 
+/// `from <path>: Source file.`; an optional one ends in `(optional)` or `(optional, default: '.')`.
+/// Without a doc the note follows the head directly.
 fn parameter_entry(p: &ParamSpec) -> String {
-    entry(format!("{} <{}>", p.name, (p.type_name)()), p.doc)
+    let head = format!("{} <{}>", p.name, (p.type_name)());
+    if !p.optional {
+        return entry(head, p.doc);
+    }
+    let note = match p.default_display.and_then(|show| show()) {
+        Some(d) => format!("(optional, default: {d})"),
+        None => "(optional)".to_string(),
+    };
+    if p.doc.is_empty() {
+        format!("  {head} {note}")
+    } else {
+        entry(head, &format!("{} {note}", p.doc))
+    }
 }
 
 /// One `Subcommands:` line: the full command line and the first line of the doc, if any.
@@ -137,7 +155,7 @@ pub fn render_version(program: &str, version: &str) -> String {
 mod tests {
     use super::*;
     use crate::spec::ParamSpec;
-    use crate::test_util::{documented, flag, positional, switch, with_short};
+    use crate::test_util::{documented, flag, optional, positional, switch, with_short};
     use crate::value::FromArg;
 
     static HELLO_PARAMS: [ParamSpec; 2] = [
@@ -168,6 +186,52 @@ mod tests {
         params: &NESTED_PARAMS,
         version: None,
     };
+
+    fn dot() -> Option<String> {
+        Some("'.'".to_string())
+    }
+
+    // The `copy` block of `examples/flags_and_arguments.rs`: from, (to) with a default, (label).
+    static COPY_PARAMS: [ParamSpec; 3] = [
+        documented(positional("from"), "Source file."),
+        documented(
+            ParamSpec {
+                default_display: Some(dot),
+                ..optional(positional("to"))
+            },
+            "Destination; the current directory if omitted.",
+        ),
+        optional(positional("label")),
+    ];
+    static COPY: CommandSpec = CommandSpec {
+        path: &["copy"],
+        aliases: &[],
+        doc: "",
+        params: &COPY_PARAMS,
+        version: None,
+    };
+
+    #[test]
+    fn usage_shows_optional_positionals_in_parentheses() {
+        assert_eq!(render_usage(&COPY, "app"), "app copy <from> (to) (label)");
+    }
+
+    #[test]
+    fn parameters_show_optional_and_default() {
+        let expected = "\
+Usage:
+  > app copy <from> (to) (label)
+
+Flags:
+  -h, --help: Display the help message for this command
+
+Parameters:
+  from <string>: Source file.
+  to <string>: Destination; the current directory if omitted. (optional, default: '.')
+  label <string> (optional)
+";
+        assert_eq!(render_help(&COPY, "app", &[]), expected);
+    }
 
     #[test]
     fn usage_for_the_root() {

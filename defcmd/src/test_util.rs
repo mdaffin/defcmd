@@ -13,6 +13,7 @@ pub const fn positional(name: &'static str) -> ParamSpec {
         type_name: <String as FromArg>::type_name,
         possible_values: <String as FromArg>::possible_values,
         default_display: None,
+        optional: false,
     }
 }
 
@@ -26,6 +27,7 @@ pub const fn switch(name: &'static str, long: &'static str) -> ParamSpec {
         type_name: <bool as FromArg>::type_name,
         possible_values: <bool as FromArg>::possible_values,
         default_display: None,
+        optional: false,
     }
 }
 
@@ -48,6 +50,14 @@ pub const fn flag(name: &'static str, long: &'static str) -> ParamSpec {
 pub const fn with_short(p: ParamSpec, short: char) -> ParamSpec {
     ParamSpec {
         short: Some(short),
+        ..p
+    }
+}
+
+/// `p` marked as an optional positional.
+pub const fn optional(p: ParamSpec) -> ParamSpec {
+    ParamSpec {
+        optional: true,
         ..p
     }
 }

@@ -191,7 +191,10 @@ pub fn parse(
     if let Some(e) = pending {
         return Err(e);
     }
-    if let Some(&p) = positionals.get(taken) {
+    // A required positional cannot follow an optional one, so only the next one needs a look.
+    if let Some(&p) = positionals.get(taken)
+        && !spec.params[p].optional
+    {
         return Err(UsageError::new(format!(
             "missing required argument '{}'",
             spec.params[p].name
@@ -235,7 +238,7 @@ impl Parsed {
 mod tests {
     use super::*;
     use crate::spec::ParamSpec;
-    use crate::test_util::{flag, positional, switch, with_short};
+    use crate::test_util::{flag, optional, positional, switch, with_short};
 
     // from, to (positionals), force and dry_run (switches).
     static PARAMS: [ParamSpec; 4] = [
@@ -384,6 +387,60 @@ mod tests {
         assert_eq!(err(&[]), "missing required argument 'from'");
         assert_eq!(err(&["a"]), "missing required argument 'to'");
         assert_eq!(err(&["--force", "a"]), "missing required argument 'to'");
+    }
+
+    // from (required), to (optional), force (switch).
+    static OPT_PARAMS: [ParamSpec; 3] = [
+        positional("from"),
+        optional(positional("to")),
+        switch("force", "force"),
+    ];
+    static OPT: CommandSpec = CommandSpec {
+        path: &["copy"],
+        aliases: &[],
+        doc: "",
+        params: &OPT_PARAMS,
+        version: None,
+    };
+
+    fn opt_parsed(a: &[&str]) -> Parsed {
+        match run(&OPT, a).unwrap() {
+            Outcome::Run(p) => p,
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn optional_positional_may_be_left_out() {
+        let p = opt_parsed(&["a"]);
+        assert_eq!(values(&p.raw[0]), ["a"]);
+        assert_eq!(p.raw[1], Raw::Absent);
+    }
+
+    #[test]
+    fn optional_positional_is_filled_in_declaration_order_with_flags_anywhere() {
+        let p = opt_parsed(&["a", "--force", "b"]);
+        assert_eq!(values(&p.raw[0]), ["a"]);
+        assert_eq!(values(&p.raw[1]), ["b"]);
+        assert_eq!(values(&p.raw[2]), ["true"]);
+        let p = opt_parsed(&["--force", "a", "b"]);
+        assert_eq!(values(&p.raw[1]), ["b"]);
+    }
+
+    #[test]
+    fn required_positional_before_the_optional_one_is_still_required() {
+        assert_eq!(
+            run(&OPT, &[]).unwrap_err().to_string(),
+            "missing required argument 'from'"
+        );
+    }
+
+    #[test]
+    fn extras_after_the_optional_positional_are_unexpected() {
+        assert_eq!(
+            run(&OPT, &["a", "b", "c"]).unwrap_err().to_string(),
+            "unexpected argument 'c'"
+        );
     }
 
     #[test]

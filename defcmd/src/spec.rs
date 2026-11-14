@@ -32,6 +32,8 @@ pub struct ParamSpec {
     pub possible_values: fn() -> &'static [&'static str],
     /// Renders the default for help; `None` if the parameter has no explicit default.
     pub default_display: Option<fn() -> Option<String>>,
+    /// A positional that may be left out (`Option<T>` or `#[default]`). Always false for flags.
+    pub optional: bool,
 }
 
 impl ParamSpec {
@@ -82,6 +84,7 @@ mod tests {
             type_name: <String as FromArg>::type_name,
             possible_values: <String as FromArg>::possible_values,
             default_display: None,
+            optional: false,
         },
         ParamSpec {
             name: "dry_run",
@@ -92,6 +95,7 @@ mod tests {
             type_name: <bool as FromArg>::type_name,
             possible_values: <bool as FromArg>::possible_values,
             default_display: None,
+            optional: false,
         },
     ];
 

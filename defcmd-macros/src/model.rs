@@ -68,6 +68,21 @@ pub fn classify(ty: &Type) -> TypeKind {
     }
 }
 
+/// `T` of `Option<T>` or `Vec<T>` (by the last path segment), if `ty` has exactly one type argument.
+pub fn inner_type(ty: &Type) -> Option<&Type> {
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    let seg = path.path.segments.last()?;
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    match (args.args.len(), args.args.first()) {
+        (1, Some(syn::GenericArgument::Type(inner))) => Some(inner),
+        _ => None,
+    }
+}
+
 /// The names given in `#[flag(..)]`.
 #[derive(Default)]
 struct FlagNames {
@@ -303,6 +318,15 @@ mod tests {
         assert_eq!(kind(parse_quote!(&str)), TypeKind::Other);
         // Aliases are not recognised.
         assert_eq!(kind(parse_quote!(Maybe<u8>)), TypeKind::Other);
+    }
+
+    #[test]
+    fn inner_type_is_the_single_type_argument() {
+        let ty: Type = parse_quote!(Option<std::path::PathBuf>);
+        let inner = inner_type(&ty).unwrap();
+        assert_eq!(quote::quote!(#inner).to_string(), "std :: path :: PathBuf");
+        assert!(inner_type(&parse_quote!(String)).is_none());
+        assert!(inner_type(&parse_quote!(HashMap<String, u8>)).is_none());
     }
 
     #[test]
