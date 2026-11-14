@@ -34,7 +34,7 @@ struct Entity<'a> {
 pub(crate) fn problems(regs: &[&Registration]) -> Vec<String> {
     let mut problems = Vec::new();
 
-    // 1. Two commands with the same full path (the root is check 3).
+    // 1. Two commands with the same full path (the root is check 2).
     let mut paths: Vec<&[&str]> = Vec::new();
     for reg in regs {
         let path = reg.spec.path;
@@ -53,7 +53,7 @@ pub(crate) fn problems(regs: &[&Registration]) -> Vec<String> {
         }
     }
 
-    // 3. More than one root command.
+    // 2. More than one root command.
     let roots: Vec<&&Registration> = regs.iter().filter(|r| r.spec.path.is_empty()).collect();
     if roots.len() > 1 {
         problems.push(format!(
@@ -63,7 +63,7 @@ pub(crate) fn problems(regs: &[&Registration]) -> Vec<String> {
         ));
     }
 
-    // 2. A name or alias equal to a sibling's name, alias or implicit group name.
+    // 3. A name or alias equal to a sibling's name, alias or implicit group name.
     let mut entities: Vec<Entity> = Vec::new();
     let mut registered: Vec<&[&str]> = Vec::new();
     for reg in regs {

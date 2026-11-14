@@ -37,7 +37,7 @@ impl std::error::Error for UsageError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Raw {
     Absent,
-    /// Positionals, switches (stored as `true` or `false`) and value flags. Later: repeated flags.
+    /// Positionals, switches (stored as `true` or `false`) and value flags. A repeated flag collects every value.
     Values(Vec<OsString>),
 }
 
