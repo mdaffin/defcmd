@@ -311,7 +311,7 @@ mod dispatch_tests {
     use super::*;
     use crate::parse::{Parsed, UsageError};
     use crate::spec::ParamSpec;
-    use crate::test_util::{positional, switch};
+    use crate::test_util::{flag, positional, switch};
     use std::sync::Mutex;
 
     /// Which glue ran, with the first positional it saw.
@@ -573,5 +573,112 @@ Flags:
             out.contains("Subcommands:\n  conf remote\n  conf remote add - Add a remote.\n"),
             "{out}"
         );
+    }
+
+    // A root with `--verbose` and a value flag `--prio`, one child with its own flags. Their
+    // glue writes its own name to `err`, so a test sees which body ran without shared state.
+    fn glue_todo(_: &Parsed, err: &mut dyn Write) -> Result<ExitCode, UsageError> {
+        emit(err, "ran todo");
+        Ok(ExitCode::SUCCESS)
+    }
+    fn glue_todo_list(_: &Parsed, err: &mut dyn Write) -> Result<ExitCode, UsageError> {
+        emit(err, "ran list");
+        Ok(ExitCode::SUCCESS)
+    }
+
+    static TODO_PARAMS: [ParamSpec; 2] = [switch("verbose", "verbose"), flag("prio", "prio")];
+    static TODO: CommandSpec = CommandSpec {
+        path: &[],
+        aliases: &[],
+        doc: "A tiny todo list.",
+        params: &TODO_PARAMS,
+        version: Some("1.0.0"),
+    };
+    static LIST_PARAMS: [ParamSpec; 1] = [switch("all", "all")];
+    static TODO_LIST: CommandSpec = CommandSpec {
+        path: &["list"],
+        aliases: &[],
+        doc: "List items.",
+        params: &LIST_PARAMS,
+        version: None,
+    };
+    static R_TODO: Registration = Registration {
+        spec: &TODO,
+        run: glue_todo,
+    };
+    static R_TODO_LIST: Registration = Registration {
+        spec: &TODO_LIST,
+        run: glue_todo_list,
+    };
+
+    fn todo(args: &[&str]) -> (ExitCode, String, String) {
+        run(&[&R_TODO, &R_TODO_LIST], args)
+    }
+
+    #[test]
+    fn the_roots_flags_may_come_before_the_subcommand_word() {
+        let (code, _, err) = todo(&["todo", "--verbose", "list"]);
+        // Only the child's body ran.
+        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, "ran list"));
+    }
+
+    #[test]
+    fn flags_are_not_inherited() {
+        let (code, _, err) = todo(&["todo", "list", "--verbose"]);
+        assert_eq!(code, ExitCode::from(2));
+        assert!(
+            err.starts_with("Error: unknown flag '--verbose'\n"),
+            "{err}"
+        );
+        assert!(err.contains("Usage: todo list {flags}"), "{err}");
+        assert!(!err.contains("ran"), "{err}");
+    }
+
+    #[test]
+    fn a_value_flag_before_the_word_consumes_the_next_argument() {
+        // `list` was the value of `--prio`, so no subcommand is chosen: the root runs.
+        let (code, _, err) = todo(&["todo", "--prio", "list"]);
+        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, "ran todo"));
+        let (code, _, err) = todo(&["todo", "--prio", "3", "list"]);
+        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, "ran list"));
+    }
+
+    #[test]
+    fn after_double_dash_the_word_is_a_positional() {
+        let (code, _, err) = todo(&["todo", "--", "list"]);
+        assert_eq!(code, ExitCode::from(2));
+        assert!(
+            err.starts_with("Error: unexpected argument 'list'\n"),
+            "{err}"
+        );
+        assert!(!err.contains("ran"), "{err}");
+    }
+
+    #[test]
+    fn the_subcommand_word_must_match_exactly() {
+        for word in ["lis", "List", "list2"] {
+            let (code, _, err) = todo(&["todo", word]);
+            assert_eq!(code, ExitCode::from(2), "{word}");
+            assert!(
+                err.contains(&format!("unexpected argument '{word}'")),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn help_belongs_to_the_command_whose_flags_it_follows() {
+        let (code, out, err) = todo(&["todo", "--help", "list"]);
+        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, ""));
+        assert!(out.starts_with("A tiny todo list.\n"), "{out}");
+        let (code, out, err) = todo(&["todo", "list", "--help"]);
+        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, ""));
+        assert!(out.starts_with("List items.\n"), "{out}");
+    }
+
+    #[test]
+    fn the_root_body_runs_only_when_no_subcommand_is_chosen() {
+        let (code, _, err) = todo(&["todo", "--verbose"]);
+        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, "ran todo"));
     }
 }
