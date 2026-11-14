@@ -1,13 +1,13 @@
 //! Running a program: find the root command, parse, and print help, version and errors.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
 use crate::help::{render_help, render_usage_error, render_version};
-use crate::parse::{Outcome, parse};
-use crate::spec::{CommandSpec, Registration};
+use crate::parse::{Outcome, Raw, parse_with_globals};
+use crate::spec::{CommandSpec, ParamSpec, Registration};
 use crate::tree::Node;
 
 /// Writes `text` and flushes. A closed pipe (`| head`) is not an error for defcmd's own output.
@@ -24,8 +24,24 @@ fn program_name(argv0: Option<&OsString>) -> String {
         .unwrap_or_else(|| "main".to_string())
 }
 
-fn usage_error(err: &mut dyn Write, spec: &CommandSpec, program: &str, message: &str) -> ExitCode {
-    emit(err, &render_usage_error(spec, program, message));
+/// The global flags of `root` that `spec` accepts without declaring them itself.
+fn inherited(root: &CommandSpec, spec: &CommandSpec) -> Vec<&'static ParamSpec> {
+    if spec.path.is_empty() {
+        return Vec::new();
+    }
+    (root.params.iter())
+        .filter(|g| g.global && !spec.params.iter().any(|p| p.global && p.long == g.long))
+        .collect()
+}
+
+fn usage_error(
+    err: &mut dyn Write,
+    spec: &CommandSpec,
+    program: &str,
+    message: &str,
+    inherited: &[&ParamSpec],
+) -> ExitCode {
+    emit(err, &render_usage_error(spec, program, message, inherited));
     ExitCode::from(2)
 }
 
@@ -46,13 +62,21 @@ pub(crate) fn run_registrations(
         return ExitCode::from(1);
     };
 
+    // The root's global flags are accepted at every level; their values are kept here.
+    let globals = tree.spec.params;
+    let mut store = vec![Raw::Absent; globals.len()];
     let mut node = &tree;
     let mut rest: Vec<OsString> = args.get(1..).unwrap_or_default().to_vec();
     loop {
         let spec = node.spec;
-        match parse(spec, &rest, &|word| node.child_index(word)) {
+        let extra = inherited(tree.spec, spec);
+        let child = |word: &OsStr| node.child_index(word);
+        match parse_with_globals(spec, &rest, &child, globals, &mut store) {
             Ok(Outcome::Help) => {
-                emit(out, &render_help(spec, &program, &node.descendants()));
+                emit(
+                    out,
+                    &render_help(spec, &program, &node.descendants(), &extra),
+                );
                 return ExitCode::SUCCESS;
             }
             Ok(Outcome::Version) => {
@@ -65,19 +89,22 @@ pub(crate) fn run_registrations(
             Ok(Outcome::Run(parsed)) => {
                 let Some(reg) = node.reg else {
                     // An implicit group has no body: show its help, but as a failure.
-                    emit(out, &render_help(spec, &program, &node.descendants()));
+                    emit(
+                        out,
+                        &render_help(spec, &program, &node.descendants(), &extra),
+                    );
                     return ExitCode::from(2);
                 };
                 return match (reg.run)(&parsed, err) {
                     Ok(code) => code,
-                    Err(e) => usage_error(err, spec, &program, &e.to_string()),
+                    Err(e) => usage_error(err, spec, &program, &e.to_string(), &extra),
                 };
             }
             Ok(Outcome::Sub { index, rest: after }) => {
                 node = &node.children[index];
                 rest = after;
             }
-            Err(e) => return usage_error(err, spec, &program, &e.to_string()),
+            Err(e) => return usage_error(err, spec, &program, &e.to_string(), &extra),
         }
     }
 }
@@ -474,10 +501,13 @@ mod dispatch_tests {
         let (code, ..) = run(regs, &["hi", "Ada"]);
         assert_eq!(code, ExitCode::SUCCESS);
         assert!(ran("root:Ada"));
-        // A flag before the word does not stop it naming a child.
-        let (code, ..) = run(regs, &["hi", "--loud", "list"]);
-        assert_eq!(code, ExitCode::SUCCESS);
-        assert!(ran("get:"));
+        // A flag of the root's own, before the word, has no effect on the child, so it is refused.
+        let (code, _, err) = run(regs, &["hi", "--loud", "list"]);
+        assert_eq!(code, ExitCode::from(2));
+        assert!(
+            err.starts_with("Error: flag '--loud' has no effect before the subcommand 'list'\n"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -638,10 +668,16 @@ Flags:
     }
 
     #[test]
-    fn the_roots_flags_may_come_before_the_subcommand_word() {
-        let (code, _, err) = todo(&["todo", "--verbose", "list"]);
-        // Only the child's body ran.
-        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, "ran list"));
+    fn a_root_flag_cannot_come_before_the_subcommand_word() {
+        let (code, out, err) = todo(&["todo", "--verbose", "list"]);
+        assert_eq!(code, ExitCode::from(2));
+        assert_eq!(out, "");
+        assert!(
+            err.starts_with("Error: flag '--verbose' has no effect before the subcommand 'list'\n"),
+            "{err}"
+        );
+        assert!(err.contains("Usage: todo {flags}"), "{err}");
+        assert!(!err.contains("ran"), "{err}");
     }
 
     #[test]
@@ -661,8 +697,6 @@ Flags:
         // `list` was the value of `--prio`, so no subcommand is chosen: the root runs.
         let (code, _, err) = todo(&["todo", "--prio", "list"]);
         assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, "ran todo"));
-        let (code, _, err) = todo(&["todo", "--prio", "3", "list"]);
-        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, "ran list"));
     }
 
     #[test]
@@ -842,5 +876,128 @@ Flags:
         let (code, out, err) = nushell(&["todo", "remote"]);
         assert_eq!((code, err.as_str()), (ExitCode::from(2), ""));
         assert_eq!(out, expected);
+    }
+}
+
+/// A root with a global flag, a child that declares it and a child that does not.
+#[cfg(test)]
+mod global_dispatch_tests {
+    use super::*;
+    use crate::parse::{Parsed, UsageError};
+    use crate::spec::{Location, ParamSpec};
+    use crate::test_util::{flag, global, positional, switch, with_short};
+
+    // Each glue reports to `err`, so a test sees what the body got.
+    fn glue_root(p: &Parsed, err: &mut dyn Write) -> Result<ExitCode, UsageError> {
+        let verbose = p.get_opt::<bool>(0)?;
+        let jobs = p.get_opt::<u8>(1)?;
+        emit(err, &format!("root verbose={verbose:?} jobs={jobs:?}"));
+        Ok(ExitCode::SUCCESS)
+    }
+    fn glue_list(p: &Parsed, err: &mut dyn Write) -> Result<ExitCode, UsageError> {
+        let verbose = p.get_opt::<bool>(1)?;
+        emit(err, &format!("list verbose={verbose:?}"));
+        Ok(ExitCode::SUCCESS)
+    }
+    fn glue_plain(p: &Parsed, err: &mut dyn Write) -> Result<ExitCode, UsageError> {
+        emit(err, &format!("plain {:?}", p.get_opt::<String>(0)?));
+        Ok(ExitCode::SUCCESS)
+    }
+
+    static ROOT_PARAMS: [ParamSpec; 2] = [
+        global(with_short(switch("verbose", "verbose"), 'v')),
+        global(flag("jobs", "jobs")),
+    ];
+    static ROOT: CommandSpec = CommandSpec {
+        path: &[],
+        aliases: &[],
+        doc: "",
+        params: &ROOT_PARAMS,
+        version: None,
+    };
+    static LIST_PARAMS: [ParamSpec; 2] = [
+        positional("name"),
+        global(with_short(switch("verbose", "verbose"), 'v')),
+    ];
+    static LIST: CommandSpec = CommandSpec {
+        path: &["list"],
+        aliases: &[],
+        doc: "",
+        params: &LIST_PARAMS,
+        version: None,
+    };
+    static PLAIN_PARAMS: [ParamSpec; 1] = [positional("name")];
+    static PLAIN: CommandSpec = CommandSpec {
+        path: &["plain"],
+        aliases: &[],
+        doc: "",
+        params: &PLAIN_PARAMS,
+        version: None,
+    };
+    static R_ROOT: Registration = Registration {
+        location: Location::UNKNOWN,
+        spec: &ROOT,
+        run: glue_root,
+    };
+    static R_LIST: Registration = Registration {
+        location: Location::UNKNOWN,
+        spec: &LIST,
+        run: glue_list,
+    };
+    static R_PLAIN: Registration = Registration {
+        location: Location::UNKNOWN,
+        spec: &PLAIN,
+        run: glue_plain,
+    };
+
+    fn app(args: &[&str]) -> (ExitCode, String) {
+        let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_registrations(&[&R_ROOT, &R_LIST, &R_PLAIN], &args, &mut out, &mut err);
+        assert!(out.is_empty());
+        (code, String::from_utf8(err).unwrap())
+    }
+
+    #[test]
+    fn the_root_gets_its_global_flags() {
+        let (code, err) = app(&["app", "-v", "--jobs", "3"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!(err, "root verbose=Some(true) jobs=Some(3)");
+    }
+
+    #[test]
+    fn a_global_flag_reaches_the_child_from_before_or_after_its_name() {
+        let want = (ExitCode::SUCCESS, "list verbose=Some(true)");
+        for args in [
+            &["app", "-v", "list", "x"][..],
+            &["app", "list", "x", "-v"],
+            &["app", "list", "-v", "x"],
+            &["app", "--verbose", "list", "x"],
+        ] {
+            let (code, err) = app(args);
+            assert_eq!((code, err.as_str()), want, "{args:?}");
+        }
+        let (_, err) = app(&["app", "list", "x"]);
+        assert_eq!(err, "list verbose=None");
+    }
+
+    #[test]
+    fn a_child_that_does_not_declare_a_global_flag_still_accepts_it() {
+        let (code, err) = app(&["app", "--jobs", "2", "plain", "x", "-v"]);
+        assert_eq!(
+            (code, err.as_str()),
+            (ExitCode::SUCCESS, "plain Some(\"x\")")
+        );
+    }
+
+    #[test]
+    fn a_bad_global_value_is_reported_by_the_command_that_declares_it() {
+        let (code, err) = app(&["app", "list", "x", "--verbose=maybe"]);
+        assert_eq!(code, ExitCode::from(2));
+        assert!(
+            err.starts_with("Error: invalid value 'maybe' for '--verbose': expected bool\n"),
+            "{err}"
+        );
+        assert!(err.contains("Usage: app list {flags} <name>"), "{err}");
     }
 }

@@ -17,8 +17,8 @@
 //! $ todo remote add origin https://example.com/repo
 //! $ todo remote remove origin
 //! $ todo remote                       # a group: prints its help, exit 2
-//! $ todo --verbose list               # `--verbose` belongs to `todo`; `list` never sees it
-//! $ todo list --verbose               # exit 2: unknown flag for `list`
+//! $ todo --verbose list               # `--verbose` is a global flag of `todo`: `list` gets it
+//! $ todo list --verbose               # the same, after the subcommand word
 //! $ todo nosuch                       # exit 2: unexpected argument (`todo` takes no positional)
 //! $ todo -- list                      # exit 2 too: after `--`, `list` is a positional
 //! ```
@@ -39,8 +39,11 @@
 //!   a subcommand name, the subcommand wins (as in nushell). Use `--` to pass such a word as
 //!   a positional. If it matches nothing and the command takes no positional, that is a usage
 //!   error.
-//! - Flags are not inherited: `todo --verbose list` sets the root's flag, not `list`'s. The
-//!   root's body does not run when a subcommand does, so that flag is only validated.
+//! - A flag of the root that is not global cannot come before a subcommand word: the root's
+//!   body does not run then, so it would have no effect. `#[flag(global)]` makes it a global
+//!   flag instead: every command accepts it, before or after its name, and a command that wants
+//!   the value declares the same flag (`list` does; `add` still accepts `--verbose`, and its
+//!   help lists it).
 //! - The whole tree is validated at every start-up (duplicate names and aliases, more than
 //!   one root), so mistakes surface on the first run rather than in some rare path.
 //!
@@ -76,6 +79,7 @@
 //!   -h, --help: Display the help message for this command
 //!   -V, --version: Print the version
 //!   -p, --priority <int>: 1 (low) to 3 (high). (default: 1)
+//!   -v, --verbose: Print extra detail.
 //!
 //! Parameters:
 //!   title <string>: What needs doing.
@@ -86,7 +90,7 @@
 //!
 //! ```text
 //! Usage:
-//!   > todo remote
+//!   > todo remote {flags}
 //!
 //! Subcommands:
 //!   todo remote add - Add a remote list.
@@ -95,6 +99,7 @@
 //! Flags:
 //!   -h, --help: Display the help message for this command
 //!   -V, --version: Print the version
+//!   -v, --verbose: Print extra detail.
 //! ```
 
 use defcmd::command;
@@ -103,7 +108,7 @@ use defcmd::command;
 #[command]
 fn main(
     /// Print extra detail.
-    #[flag(-v)]
+    #[flag(global, -v)]
     verbose: bool,
 ) {
     // Runs only when no subcommand is given.
@@ -129,8 +134,11 @@ fn list(
     /// Include completed items.
     #[flag(-a)]
     all: bool,
+    /// Print extra detail.
+    #[flag(global, -v)]
+    verbose: bool,
 ) {
-    println!("list all={all}");
+    println!("list all={all} verbose={verbose}");
 }
 
 /// Add a remote list.

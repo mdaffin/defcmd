@@ -10,10 +10,11 @@ pub fn command_line(spec: &CommandSpec, program: &str) -> String {
 }
 
 /// The usage line without the `>`: the command path, `{flags}` if there are flags, then the
-/// positionals. For example `copy {flags} <from>`.
-pub fn render_usage(spec: &CommandSpec, program: &str) -> String {
+/// positionals. For example `copy {flags} <from>`. `inherited` are the global flags of the root
+/// that the command does not declare itself; they count as flags.
+pub fn render_usage(spec: &CommandSpec, program: &str, inherited: &[&ParamSpec]) -> String {
     let mut line = command_line(spec, program);
-    if spec.params.iter().any(|p| p.kind != ParamKind::Positional) {
+    if !inherited.is_empty() || spec.params.iter().any(|p| p.kind != ParamKind::Positional) {
         line.push_str(" {flags}");
     }
     for p in spec
@@ -102,13 +103,22 @@ fn subcommand_entry(spec: &CommandSpec, program: &str) -> String {
 }
 
 /// The full `--help` text, ending in a newline. Parts that have nothing to say are left out.
-/// `descendants` are all commands below `spec`, already sorted by path.
-pub fn render_help(spec: &CommandSpec, program: &str, descendants: &[&CommandSpec]) -> String {
+/// `descendants` are all commands below `spec`, already sorted by path. `inherited` are the
+/// global flags of the root that `spec` does not declare itself: it accepts them all the same.
+pub fn render_help(
+    spec: &CommandSpec,
+    program: &str,
+    descendants: &[&CommandSpec],
+    inherited: &[&ParamSpec],
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     if !spec.doc.is_empty() {
         parts.push(spec.doc.to_string());
     }
-    parts.push(format!("Usage:\n  > {}", render_usage(spec, program)));
+    parts.push(format!(
+        "Usage:\n  > {}",
+        render_usage(spec, program, inherited)
+    ));
 
     if !descendants.is_empty() {
         let lines: Vec<String> = descendants
@@ -122,6 +132,7 @@ pub fn render_help(spec: &CommandSpec, program: &str, descendants: &[&CommandSpe
     let short_taken = |c: char| {
         spec.params
             .iter()
+            .chain(inherited.iter().copied())
             .any(|p| p.kind != ParamKind::Positional && p.short == Some(c))
     };
     let help_head = if short_taken('h') {
@@ -144,6 +155,7 @@ pub fn render_help(spec: &CommandSpec, program: &str, descendants: &[&CommandSpe
     flags.extend(
         spec.params
             .iter()
+            .chain(inherited.iter().copied())
             .filter(|p| p.kind != ParamKind::Positional)
             .map(flag_entry),
     );
@@ -166,10 +178,15 @@ pub fn render_help(spec: &CommandSpec, program: &str, descendants: &[&CommandSpe
 
 /// A usage error as printed to stderr: an `Error:` line, then an indented `help:` line with the
 /// usage and a pointer to `--help`. Ends in a newline.
-pub fn render_usage_error(spec: &CommandSpec, program: &str, message: &str) -> String {
+pub fn render_usage_error(
+    spec: &CommandSpec,
+    program: &str,
+    message: &str,
+    inherited: &[&ParamSpec],
+) -> String {
     format!(
         "Error: {message}\n  help: Usage: {}. Use `{} --help` for more information.\n",
-        render_usage(spec, program),
+        render_usage(spec, program, inherited),
         command_line(spec, program)
     )
 }
@@ -243,7 +260,10 @@ mod tests {
 
     #[test]
     fn usage_shows_optional_positionals_in_parentheses() {
-        assert_eq!(render_usage(&COPY, "app"), "app copy <from> (to) (label)");
+        assert_eq!(
+            render_usage(&COPY, "app", &[]),
+            "app copy <from> (to) (label)"
+        );
     }
 
     #[test]
@@ -260,7 +280,7 @@ Parameters:
   to <string>: Destination; the current directory if omitted. (optional, default: '.')
   label <string> (optional)
 ";
-        assert_eq!(render_help(&COPY, "app", &[]), expected);
+        assert_eq!(render_help(&COPY, "app", &[], &[]), expected);
     }
 
     static RM_PARAMS: [ParamSpec; 2] = [
@@ -277,7 +297,7 @@ Parameters:
 
     #[test]
     fn rest_is_shown_with_dots_in_usage_and_parameters() {
-        assert_eq!(render_usage(&RM, "app"), "app rm <dest> ...(files)");
+        assert_eq!(render_usage(&RM, "app", &[]), "app rm <dest> ...(files)");
         let expected = "\
 Usage:
   > app rm <dest> ...(files)
@@ -289,18 +309,61 @@ Parameters:
   dest <string>
   ...files <string>: Files to remove.
 ";
-        assert_eq!(render_help(&RM, "app", &[]), expected);
+        assert_eq!(render_help(&RM, "app", &[], &[]), expected);
+    }
+
+    // `--verbose` is a global flag of the root that `COPY` does not declare itself.
+    static VERBOSE: ParamSpec = documented(
+        crate::test_util::global(with_short(switch("verbose", "verbose"), 'v')),
+        "Chatty output.",
+    );
+    static HOST: ParamSpec = crate::test_util::global(with_short(flag("host", "host"), 'h'));
+
+    #[test]
+    fn inherited_global_flags_follow_the_commands_own_in_help_and_usage() {
+        let expected = "\
+Usage:
+  > app copy {flags} <from> (to) (label)
+
+Flags:
+  -h, --help: Display the help message for this command
+  -v, --verbose: Chatty output.
+
+Parameters:
+  from <string>: Source file.
+  to <string>: Destination; the current directory if omitted. (optional, default: '.')
+  label <string> (optional)
+";
+        assert_eq!(render_help(&COPY, "app", &[], &[&VERBOSE]), expected);
+        assert_eq!(
+            render_usage(&COPY, "app", &[&VERBOSE]),
+            "app copy {flags} <from> (to) (label)"
+        );
+        assert!(
+            render_usage_error(&COPY, "app", "oops", &[&VERBOSE])
+                .contains("Usage: app copy {flags} <from>")
+        );
+    }
+
+    #[test]
+    fn an_inherited_short_h_replaces_the_generated_help_form() {
+        let help = render_help(&COPY, "app", &[], &[&HOST]);
+        assert!(
+            help.contains("\n  --help: Display the help message"),
+            "{help}"
+        );
+        assert!(help.contains("\n  -h, --host <string>\n"), "{help}");
     }
 
     #[test]
     fn usage_for_the_root() {
-        assert_eq!(render_usage(&HELLO, "hello"), "hello {flags} <name>");
+        assert_eq!(render_usage(&HELLO, "hello", &[]), "hello {flags} <name>");
     }
 
     #[test]
     fn usage_without_flags_has_no_flags_marker() {
-        assert_eq!(render_usage(&NESTED, "app"), "app conf get <key>");
-        assert_eq!(render_usage(&BARE, "app"), "app");
+        assert_eq!(render_usage(&NESTED, "app", &[]), "app conf get <key>");
+        assert_eq!(render_usage(&BARE, "app", &[]), "app");
     }
 
     #[test]
@@ -319,7 +382,7 @@ Flags:
 Parameters:
   name <string>: Who to greet.
 ";
-        assert_eq!(render_help(&HELLO, "hello", &[]), expected);
+        assert_eq!(render_help(&HELLO, "hello", &[], &[]), expected);
     }
 
     #[test]
@@ -338,7 +401,7 @@ Flags:
 Parameters:
   key <string>
 ";
-        assert_eq!(render_help(&NESTED, "app", &[]), expected);
+        assert_eq!(render_help(&NESTED, "app", &[], &[]), expected);
     }
 
     #[test]
@@ -350,7 +413,7 @@ Usage:
 Flags:
   -h, --help: Display the help message for this command
 ";
-        assert_eq!(render_help(&BARE, "app", &[]), expected);
+        assert_eq!(render_help(&BARE, "app", &[], &[]), expected);
     }
 
     static CHECK: CommandSpec = CommandSpec {
@@ -395,7 +458,7 @@ Flags:
             params: &[],
             version: None,
         };
-        assert_eq!(render_help(&root, "app", &[&REMOVE]), expected);
+        assert_eq!(render_help(&root, "app", &[&REMOVE], &[]), expected);
     }
 
     #[test]
@@ -411,7 +474,10 @@ Subcommands:
 Flags:
   -h, --help: Display the help message for this command
 ";
-        assert_eq!(render_help(&BARE, "conf", &[&CHECK, &GET_DEEP]), expected);
+        assert_eq!(
+            render_help(&BARE, "conf", &[&CHECK, &GET_DEEP], &[]),
+            expected
+        );
     }
 
     fn one() -> Option<String> {
@@ -464,7 +530,7 @@ Flags:
 Parameters:
   title <string>: What needs doing.
 ";
-        assert_eq!(render_help(&ADD, "todo", &[]), expected);
+        assert_eq!(render_help(&ADD, "todo", &[], &[]), expected);
     }
 
     static MIXED_PARAMS: [ParamSpec; 6] = [
@@ -507,7 +573,7 @@ Flags:
   -o, --out-dir <string>
   --dry-run: Do not write.
 ";
-        assert_eq!(render_help(&MIXED, "app", &[]), expected);
+        assert_eq!(render_help(&MIXED, "app", &[], &[]), expected);
     }
 
     #[test]
@@ -537,7 +603,7 @@ Flags:
   --include <string> (repeatable)
   --retries <int>: Retry count.
 ";
-        assert_eq!(render_help(&SPEC, "app", &[]), expected);
+        assert_eq!(render_help(&SPEC, "app", &[], &[]), expected);
     }
 
     fn truthy() -> Option<String> {
@@ -571,7 +637,7 @@ Flags:
   --links, --no-links: Follow symlinks.
   -q, --quiet, --no-quiet
 ";
-        assert_eq!(render_help(&SPEC, "app", &[]), expected);
+        assert_eq!(render_help(&SPEC, "app", &[], &[]), expected);
     }
 
     #[test]
@@ -584,7 +650,7 @@ Flags:
             params: &PARAMS,
             version: None,
         };
-        assert_eq!(render_usage(&ONLY, "app"), "app {flags}");
+        assert_eq!(render_usage(&ONLY, "app", &[]), "app {flags}");
     }
 
     #[test]
@@ -599,7 +665,7 @@ Flags:
             version: None,
         };
         assert_eq!(
-            render_usage_error(&GET, "conf", "missing required argument 'key'"),
+            render_usage_error(&GET, "conf", "missing required argument 'key'", &[]),
             "Error: missing required argument 'key'\n  \
              help: Usage: conf get <file> <key>. Use `conf get --help` for more information.\n"
         );
@@ -608,7 +674,7 @@ Flags:
     #[test]
     fn usage_error_for_the_root_uses_the_program_name() {
         assert_eq!(
-            render_usage_error(&HELLO, "hello", "unknown flag '--nope'"),
+            render_usage_error(&HELLO, "hello", "unknown flag '--nope'", &[]),
             "Error: unknown flag '--nope'\n  \
              help: Usage: hello {flags} <name>. Use `hello --help` for more information.\n"
         );

@@ -7,7 +7,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::os::unix::ffi::OsStrExt;
 
-use crate::spec::{CommandSpec, ParamKind};
+use crate::spec::{CommandSpec, ParamKind, ParamSpec};
 use crate::value::{ArgError, FromArg};
 
 /// A problem with the arguments the user gave.
@@ -50,7 +50,7 @@ pub struct Parsed {
 
 /// What parsing the arguments of one command decided.
 #[derive(Debug)]
-pub enum Outcome {
+pub(crate) enum Outcome {
     /// Run the command with these values.
     Run(Parsed),
     /// `--help` or `-h` was given.
@@ -67,9 +67,19 @@ pub enum Outcome {
     },
 }
 
+/// Where the value of a flag goes.
+#[derive(Debug, Clone, Copy)]
+enum Target {
+    /// The parameter at this index of the command being parsed.
+    Own(usize),
+    /// The global flag at this index of the root command's parameters. Its value goes to the
+    /// store that every level shares.
+    Global(usize),
+}
+
 /// One flag named by an argument, before it is applied.
 struct Use<'a> {
-    found: Option<usize>,
+    found: Option<Target>,
     shown: String,
     inline: Option<&'a OsStr>,
     /// Named by `--no-x`.
@@ -78,18 +88,75 @@ struct Use<'a> {
     not_last: bool,
 }
 
-/// Parse `args` (without the command word itself) against `spec`.
-///
-/// `child` is asked about the first positional word only, before any `--`.
-pub fn parse(
+/// Parse `args` (without the command word itself) against `spec`, with no global flags.
+#[cfg(test)]
+pub(crate) fn parse(
     spec: &'static CommandSpec,
     args: &[OsString],
     child: &dyn Fn(&OsStr) -> Option<usize>,
+) -> Result<Outcome, UsageError> {
+    parse_with_globals(spec, args, child, &[], &mut [])
+}
+
+/// Parse `args` (without the command word itself) against `spec`.
+///
+/// `child` is asked about the first positional word only, before any `--`.
+///
+/// `globals` are the root command's parameters. The ones marked `global` are accepted by every
+/// command: their values go to `store` (one slot per root parameter, shared by every level
+/// parsed on the way to the command that runs), and a parameter of `spec` that is marked `global`
+/// reads the value of the root flag with the same long name when parsing is done. A flag of
+/// `spec` that is not global cannot be followed by a subcommand word, since it would have no
+/// effect.
+pub(crate) fn parse_with_globals(
+    spec: &'static CommandSpec,
+    args: &[OsString],
+    child: &dyn Fn(&OsStr) -> Option<usize>,
+    globals: &'static [ParamSpec],
+    store: &mut [Raw],
 ) -> Result<Outcome, UsageError> {
     let positionals: Vec<usize> = (0..spec.params.len())
         .filter(|&i| spec.params[i].kind == ParamKind::Positional)
         .collect();
     let mut raw = vec![Raw::Absent; spec.params.len()];
+    // The first of this command's own (not global) flags that was applied.
+    let mut first_own: Option<String> = None;
+    // The flag called `--wanted` (or, for `negatable_only`, a negatable one): a global flag
+    // first, then one of this command's own.
+    let by_long = |wanted: &str, negatable_only: bool| -> Option<Target> {
+        let fits = |p: &ParamSpec| {
+            p.kind != ParamKind::Positional
+                && p.long == Some(wanted)
+                && (p.negatable || !negatable_only)
+        };
+        globals
+            .iter()
+            .position(|p| p.global && fits(p))
+            .map(Target::Global)
+            .or_else(|| {
+                (spec.params.iter())
+                    .position(|p| !p.global && fits(p))
+                    .map(Target::Own)
+            })
+    };
+    let by_short = |wanted: char| -> Option<Target> {
+        let fits = |p: &ParamSpec| p.kind != ParamKind::Positional && p.short == Some(wanted);
+        globals
+            .iter()
+            .position(|p| p.global && fits(p))
+            .map(Target::Global)
+            .or_else(|| {
+                (spec.params.iter())
+                    .position(|p| !p.global && fits(p))
+                    .map(Target::Own)
+            })
+    };
+    let param_of = |t: Target| -> &'static ParamSpec {
+        match t {
+            Target::Own(i) => &spec.params[i],
+            Target::Global(i) => &globals[i],
+        }
+    };
     let mut taken = 0;
     // The first error found. Parsing goes on so that a later `--help` can still win.
     let mut pending: Option<UsageError> = None;
@@ -105,9 +172,13 @@ pub fn parse(
                 && !seen_positional
                 && let Some(index) = child(arg)
             {
-                return match pending {
-                    Some(e) => Err(e),
-                    None => Ok(Outcome::Sub {
+                return match (pending, first_own) {
+                    (Some(e), _) => Err(e),
+                    (None, Some(flag)) => Err(UsageError::new(format!(
+                        "flag '{flag}' has no effect before the subcommand '{}'",
+                        arg.to_string_lossy()
+                    ))),
+                    (None, None) => Ok(Outcome::Sub {
                         index,
                         rest: args[i + 1..].to_vec(),
                     }),
@@ -148,13 +219,6 @@ pub fn parse(
                 if inline.is_none() && name == "version" && spec.version.is_some() {
                     return Ok(Outcome::Version);
                 }
-                let by_long = |wanted: &str, negatable_only: bool| {
-                    spec.params.iter().position(|p| {
-                        p.kind != ParamKind::Positional
-                            && p.long == Some(wanted)
-                            && (p.negatable || !negatable_only)
-                    })
-                };
                 let mut found = by_long(&name, false);
                 let mut negated = false;
                 // `--no-x` is the negation of a negatable `x`, unless a switch is really
@@ -193,10 +257,7 @@ pub fn parse(
                     });
                 }
                 for (k, &c) in letters.iter().enumerate() {
-                    let found = spec
-                        .params
-                        .iter()
-                        .position(|p| p.kind != ParamKind::Positional && p.short == Some(c));
+                    let found = by_short(c);
                     if found.is_none() && c == 'h' {
                         return Ok(Outcome::Help);
                     }
@@ -204,7 +265,7 @@ pub fn parse(
                         return Ok(Outcome::Version);
                     }
                     let not_last = k + 1 < letters.len()
-                        && found.is_some_and(|p| spec.params[p].kind == ParamKind::Flag);
+                        && found.is_some_and(|t| param_of(t).kind == ParamKind::Flag);
                     uses.push(Use {
                         found,
                         shown: format!("-{c}"),
@@ -235,34 +296,43 @@ pub fn parse(
                             ))
                         });
                     }
-                    Some(p) if spec.params[p].kind == ParamKind::Switch => {
-                        let value = match (inline, negated) {
-                            (_, true) => OsStr::new("false"),
-                            (Some(v), false) => v,
-                            (None, false) => OsStr::new("true"),
+                    Some(target) => {
+                        let param = param_of(target);
+                        let slot = match target {
+                            Target::Own(p) => &mut raw[p],
+                            Target::Global(p) => &mut store[p],
                         };
-                        match bool::from_arg(value) {
-                            Ok(b) => raw[p] = Raw::Values(vec![b.to_string().into()]),
-                            Err(e) => {
-                                pending.get_or_insert_with(|| {
-                                    UsageError::new(format!(
-                                        "invalid value '{}' for '{}': {e}",
-                                        value.to_string_lossy(),
-                                        spec.params[p].display_name()
-                                    ))
-                                });
-                            }
+                        if matches!(target, Target::Own(_)) {
+                            first_own.get_or_insert_with(|| shown.clone());
                         }
-                    }
-                    Some(p) => {
+                        if param.kind == ParamKind::Switch {
+                            let value = match (inline, negated) {
+                                (_, true) => OsStr::new("false"),
+                                (Some(v), false) => v,
+                                (None, false) => OsStr::new("true"),
+                            };
+                            match bool::from_arg(value) {
+                                Ok(b) => *slot = Raw::Values(vec![b.to_string().into()]),
+                                Err(e) => {
+                                    pending.get_or_insert_with(|| {
+                                        UsageError::new(format!(
+                                            "invalid value '{}' for '{}': {e}",
+                                            value.to_string_lossy(),
+                                            param.display_name()
+                                        ))
+                                    });
+                                }
+                            }
+                            continue;
+                        }
                         // A value flag takes the next argument verbatim, whatever it looks like.
                         let value = match inline {
                             Some(v) => Some(v.to_owned()),
                             None => args.get(i + 1).cloned().inspect(|_| i += 1),
                         };
                         match value {
-                            Some(v) => match &mut raw[p] {
-                                Raw::Values(values) if spec.params[p].repeatable => values.push(v),
+                            Some(v) => match slot {
+                                Raw::Values(values) if param.repeatable => values.push(v),
                                 slot => *slot = Raw::Values(vec![v]),
                             },
                             None => {
@@ -290,6 +360,12 @@ pub fn parse(
             "missing required argument '{}'",
             spec.params[p].name
         )));
+    }
+    // A global flag the command declares gets the value given anywhere on the way here.
+    for (i, p) in spec.params.iter().enumerate().filter(|(_, p)| p.global) {
+        if let Some(g) = globals.iter().position(|g| g.global && g.long == p.long) {
+            raw[i] = store[g].clone();
+        }
     }
     Ok(Outcome::Run(Parsed { spec, raw }))
 }
@@ -726,7 +802,7 @@ mod tests {
     #[test]
     fn first_positional_is_offered_to_the_child_callback() {
         let child = |w: &OsStr| (w == "list").then_some(7);
-        let out = parse(&COPY, &args(&["--force", "list", "-x", "y"]), &child).unwrap();
+        let out = parse(&COPY, &args(&["list", "-x", "y"]), &child).unwrap();
         match out {
             Outcome::Sub { index, rest } => {
                 assert_eq!(index, 7);
@@ -835,8 +911,13 @@ mod tests {
             Ok(Outcome::Run(_))
         ));
         let child = |w: &OsStr| (w == "list").then_some(7);
-        let out = parse(&BUILD, &args(&["--jobs", "list", "list", "x"]), &child).unwrap();
-        assert!(matches!(out, Outcome::Sub { index: 7, .. }), "{out:?}");
+        // The first `list` is the value of `--jobs`; the second one names the child, which a
+        // flag of the command itself cannot precede.
+        let e = parse(&BUILD, &args(&["--jobs", "list", "list", "x"]), &child).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "flag '--jobs' has no effect before the subcommand 'list'"
+        );
     }
 
     #[test]
@@ -1314,5 +1395,206 @@ mod flag_form_tests {
     fn plain_value_flag_still_keeps_the_last_value() {
         let p = parsed(&["a", "-j", "1", "-j", "2"]);
         assert_eq!(p.get_opt::<u8>(2).unwrap(), Some(2));
+    }
+}
+
+/// Global flags: declared on the root, accepted at every level, parsed into a shared store.
+#[cfg(test)]
+mod global_tests {
+    use super::*;
+    use crate::spec::ParamSpec;
+    use crate::test_util::{flag, global, negatable, positional, repeatable, switch, with_short};
+
+    // The root: --verbose/-v and --quiet/-q (switches), --jobs (value flag), --color (negatable),
+    // --tag (repeatable value flag), and its own --local, which is not global.
+    static ROOT_PARAMS: [ParamSpec; 6] = [
+        global(with_short(switch("verbose", "verbose"), 'v')),
+        global(with_short(switch("quiet", "quiet"), 'q')),
+        global(flag("jobs", "jobs")),
+        global(negatable(switch("color", "color"))),
+        global(repeatable(flag("tag", "tag"))),
+        switch("local", "local"),
+    ];
+    static ROOT: CommandSpec = CommandSpec {
+        path: &[],
+        aliases: &[],
+        doc: "",
+        params: &ROOT_PARAMS,
+        version: None,
+    };
+
+    // A child that asks for --verbose and --tag, and has its own positional and --all.
+    static LIST_PARAMS: [ParamSpec; 4] = [
+        positional("name"),
+        global(with_short(switch("verbose", "verbose"), 'v')),
+        global(repeatable(flag("tag", "tag"))),
+        switch("all", "all"),
+    ];
+    static LIST: CommandSpec = CommandSpec {
+        path: &["list"],
+        aliases: &[],
+        doc: "",
+        params: &LIST_PARAMS,
+        version: None,
+    };
+
+    // A child that declares none of the globals.
+    static PLAIN_PARAMS: [ParamSpec; 1] = [positional("name")];
+    static PLAIN: CommandSpec = CommandSpec {
+        path: &["plain"],
+        aliases: &[],
+        doc: "",
+        params: &PLAIN_PARAMS,
+        version: None,
+    };
+
+    fn args(a: &[&str]) -> Vec<OsString> {
+        a.iter().map(OsString::from).collect()
+    }
+
+    fn store() -> Vec<Raw> {
+        vec![Raw::Absent; ROOT_PARAMS.len()]
+    }
+
+    fn at(
+        spec: &'static CommandSpec,
+        a: &[&str],
+        store: &mut [Raw],
+    ) -> Result<Outcome, UsageError> {
+        let child = |w: &OsStr| (w == "list").then_some(0).or((w == "plain").then_some(1));
+        parse_with_globals(spec, &args(a), &child, &ROOT_PARAMS, store)
+    }
+
+    fn values(raw: &Raw) -> Vec<&str> {
+        match raw {
+            Raw::Absent => vec![],
+            Raw::Values(v) => v.iter().map(|s| s.to_str().unwrap()).collect(),
+        }
+    }
+
+    fn run(spec: &'static CommandSpec, a: &[&str], store: &mut [Raw]) -> Parsed {
+        match at(spec, a, store).unwrap() {
+            Outcome::Run(p) => p,
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    fn err(spec: &'static CommandSpec, a: &[&str], store: &mut [Raw]) -> String {
+        at(spec, a, store).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn the_root_reads_its_own_global_flags() {
+        let mut s = store();
+        let p = run(&ROOT, &["--verbose", "--jobs", "4", "--local"], &mut s);
+        assert_eq!(values(&p.raw[0]), ["true"]);
+        assert_eq!(values(&p.raw[2]), ["4"]);
+        assert_eq!(values(&p.raw[5]), ["true"]);
+        assert_eq!(p.raw[1], Raw::Absent);
+    }
+
+    #[test]
+    fn a_global_flag_before_the_subcommand_word_reaches_the_child() {
+        let mut s = store();
+        let Outcome::Sub { index, rest } = at(&ROOT, &["--verbose", "list", "x"], &mut s).unwrap()
+        else {
+            panic!("expected Sub");
+        };
+        assert_eq!((index, rest), (0, args(&["x"])));
+        assert_eq!(values(&s[0]), ["true"]);
+        let p = run(&LIST, &["x"], &mut s);
+        assert_eq!(values(&p.raw[0]), ["x"]);
+        assert_eq!(values(&p.raw[1]), ["true"]);
+        assert_eq!(p.raw[2], Raw::Absent);
+    }
+
+    #[test]
+    fn a_global_flag_after_the_subcommand_word_reaches_the_child() {
+        let mut s = store();
+        let p = run(&LIST, &["x", "-v", "--all"], &mut s);
+        assert_eq!(values(&p.raw[1]), ["true"]);
+        assert_eq!(values(&p.raw[3]), ["true"]);
+        assert_eq!(values(&s[0]), ["true"]);
+    }
+
+    #[test]
+    fn a_value_given_at_both_levels_keeps_the_last() {
+        let mut s = store();
+        let _ = at(&ROOT, &["--jobs", "1", "plain"], &mut s).unwrap();
+        run(&PLAIN, &["x", "--jobs", "2"], &mut s);
+        assert_eq!(values(&s[2]), ["2"]);
+    }
+
+    #[test]
+    fn repeatable_globals_collect_across_levels() {
+        let mut s = store();
+        let _ = at(&ROOT, &["--tag", "a", "list"], &mut s).unwrap();
+        let p = run(&LIST, &["x", "--tag", "b"], &mut s);
+        assert_eq!(values(&p.raw[2]), ["a", "b"]);
+    }
+
+    #[test]
+    fn a_child_that_does_not_declare_a_global_still_accepts_it() {
+        let mut s = store();
+        let p = run(&PLAIN, &["--quiet", "x", "--jobs=3"], &mut s);
+        assert_eq!(values(&p.raw[0]), ["x"]);
+        assert_eq!(values(&s[1]), ["true"]);
+        assert_eq!(values(&s[2]), ["3"]);
+    }
+
+    #[test]
+    fn globals_take_the_usual_flag_forms() {
+        let mut s = store();
+        run(
+            &PLAIN,
+            &["x", "-vq", "--no-color", "--verbose=false"],
+            &mut s,
+        );
+        assert_eq!(values(&s[0]), ["false"]);
+        assert_eq!(values(&s[1]), ["true"]);
+        assert_eq!(values(&s[3]), ["false"]);
+        assert_eq!(
+            err(&PLAIN, &["x", "--jobs"], &mut store()),
+            "flag '--jobs' is missing its value"
+        );
+        assert_eq!(
+            err(&PLAIN, &["x", "--verbose=yes"], &mut store()),
+            "invalid value 'yes' for '--verbose': expected bool"
+        );
+    }
+
+    #[test]
+    fn a_root_flag_that_is_not_global_cannot_come_before_a_subcommand() {
+        assert_eq!(
+            err(&ROOT, &["--local", "list"], &mut store()),
+            "flag '--local' has no effect before the subcommand 'list'"
+        );
+        // After the subcommand word it is an unknown flag of the child, as before.
+        assert_eq!(
+            err(&LIST, &["x", "--local"], &mut store()),
+            "unknown flag '--local'"
+        );
+        // Globals are fine there, and a plain error elsewhere still wins.
+        assert!(at(&ROOT, &["-v", "list"], &mut store()).is_ok());
+        assert_eq!(
+            err(&ROOT, &["--local", "--nope", "list"], &mut store()),
+            "unknown flag '--nope'"
+        );
+    }
+
+    #[test]
+    fn a_global_short_h_replaces_the_generated_help_form() {
+        static P: [ParamSpec; 1] = [global(with_short(flag("host", "host"), 'h'))];
+        static R: CommandSpec = CommandSpec {
+            path: &[],
+            aliases: &[],
+            doc: "",
+            params: &P,
+            version: None,
+        };
+        let mut s = vec![Raw::Absent; 1];
+        let out = parse_with_globals(&R, &args(&["-h", "x"]), &|_| None, &P, &mut s).unwrap();
+        assert!(matches!(out, Outcome::Run(_)));
+        assert_eq!(values(&s[0]), ["x"]);
     }
 }

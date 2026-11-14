@@ -29,8 +29,9 @@ mod app {
         #[default(".")]
         to: String,
         #[flag] force: bool,
+        #[flag(global)] quiet: bool,
     ) {
-        note(&format!("copy {from} {to} force={force}"));
+        note(&format!("copy {from} {to} force={force} quiet={quiet}"));
     }
 
     /// Remove files.
@@ -74,22 +75,36 @@ fn an_alias_is_a_subcommand_word_too() {
 
 #[test]
 fn double_dash_makes_the_word_a_positional() {
-    ok(&["copy", "--", "remove"], "copy remove . force=false");
-    ok(&["copy", "--", "rm", "dest"], "copy rm dest force=false");
+    ok(
+        &["copy", "--", "remove"],
+        "copy remove . force=false quiet=false",
+    );
+    ok(
+        &["copy", "--", "rm", "dest"],
+        "copy rm dest force=false quiet=false",
+    );
 }
 
 #[test]
-fn flags_before_the_word_do_not_stop_it_being_a_subcommand() {
-    // The flag belongs to the root and is only validated; the subcommand runs.
-    ok(&["copy", "--force", "remove", "z"], "remove [\"z\"]");
+fn a_global_flag_before_the_word_does_not_stop_it_being_a_subcommand() {
+    ok(&["copy", "--quiet", "remove", "z"], "remove [\"z\"]");
 }
 
+#[test]
+fn a_flag_of_the_root_that_is_not_global_cannot_come_before_the_word() {
+    let (code, _, err) = run(&["copy", "--force", "remove", "z"]);
+    assert_eq!(code, ExitCode::from(2));
+    assert!(
+        err.starts_with("Error: flag '--force' has no effect before the subcommand 'remove'\n"),
+        "{err}"
+    );
+}
 #[test]
 fn another_word_is_the_first_positional() {
-    ok(&["copy", "a.txt"], "copy a.txt . force=false");
+    ok(&["copy", "a.txt"], "copy a.txt . force=false quiet=false");
     ok(
         &["copy", "a.txt", "remove"],
-        "copy a.txt remove force=false",
+        "copy a.txt remove force=false quiet=false",
     );
 }
 
@@ -98,7 +113,7 @@ fn only_the_first_positional_can_be_a_subcommand() {
     // `remove` as the second word is the destination, not a subcommand.
     ok(
         &["copy", "a", "remove", "--force"],
-        "copy a remove force=true",
+        "copy a remove force=true quiet=false",
     );
 }
 

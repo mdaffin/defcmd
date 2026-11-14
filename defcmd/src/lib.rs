@@ -37,11 +37,30 @@
 //! | `#[flag] #[default(expr)] x: T` | value flag with a default |
 //! | `#[flag] x: Vec<T>` | repeatable value flag |
 //! | `#[flag] x: Option<bool>` | tri-state switch (also `--no-x`) |
+//! | `#[flag(global)] x: T` | global flag, on the root and repeated on the commands that read it |
 //!
 //! `#[flag(-j)]`, `#[flag(--jobs)]` and `#[flag(--jobs, -j)]` choose the short and long names.
 //! Values are parsed with [`FromArg`], which is provided for strings, paths, integers, floats,
 //! `bool`, `char`, `Duration` and the `std::net` addresses. `#[derive(FromArg)]` handles
 //! fieldless enums, and `#[parse(from_str)]` or `#[parse(path::to::fn)]` handle foreign types.
+//!
+//! # Global flags
+//!
+//! A flag of the root marked `#[flag(global)]` is accepted by every command, before or after the
+//! subcommand word. A command that wants its value repeats the flag, with the same names and
+//! type; [`check`] reports a flag that does not match the root's. A command that does not repeat
+//! it still accepts it, and its help lists it. A root flag that is not global cannot come before
+//! a subcommand word, since the root's body does not run then: that is a usage error.
+//!
+//! ```no_run
+//! use defcmd::command;
+//!
+//! #[command]
+//! fn main(#[flag(global, -v)] verbose: bool) {}
+//!
+//! #[command]
+//! fn build(#[flag(global, -v)] verbose: bool) {}
+//! ```
 //!
 //! # Return values and exit codes
 //!
@@ -85,7 +104,7 @@ mod value;
 
 pub use defcmd_macros::{FromArg, command};
 pub use output::Output;
-pub use parse::{Outcome, Parsed, UsageError, parse};
+pub use parse::{Parsed, UsageError};
 pub use run::{try_run, try_run_with};
 pub use spec::{CommandSpec, Location, ParamKind, ParamSpec, Registration};
 pub use validate::check;

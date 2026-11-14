@@ -371,6 +371,7 @@ Flags:
   -h, --help: Display the help message for this command
   -V, --version: Print the version
   -p, --priority <int>: 1 (low) to 3 (high). (default: 1)
+  -v, --verbose: Print extra detail.
 
 Parameters:
   title <string>: What needs doing.
@@ -378,7 +379,7 @@ Parameters:
 
     const REMOTE_HELP: &str = "\
 Usage:
-  > todo remote
+  > todo remote {flags}
 
 Subcommands:
   todo remote add - Add a remote list.
@@ -387,6 +388,7 @@ Subcommands:
 Flags:
   -h, --help: Display the help message for this command
   -V, --version: Print the version
+  -v, --verbose: Print extra detail.
 ";
 
     #[test]
@@ -407,8 +409,8 @@ Flags:
 
     #[test]
     fn list_takes_all() {
-        ok(&["list"], "list all=false\n");
-        ok(&["list", "--all"], "list all=true\n");
+        ok(&["list"], "list all=false verbose=false\n");
+        ok(&["list", "--all"], "list all=true verbose=false\n");
     }
 
     #[test]
@@ -430,11 +432,14 @@ Flags:
     }
 
     #[test]
-    fn the_roots_flags_come_before_the_subcommand() {
-        ok(&["--verbose", "list"], "list all=false\n");
-        usage_error(&["list", "--verbose"], "unknown flag '--verbose'");
+    fn a_global_flag_comes_before_or_after_the_subcommand_word() {
+        ok(&["--verbose", "list"], "list all=false verbose=true\n");
+        ok(&["list", "--verbose"], "list all=false verbose=true\n");
+        ok(&["-v", "list", "-a"], "list all=true verbose=true\n");
+        // `add` does not read it, but accepts it.
+        ok(&["add", "x", "-v"], "add \"x\" priority=1\n");
+        ok(&["--verbose", "add", "x"], "add \"x\" priority=1\n");
     }
-
     #[test]
     fn an_unknown_word_is_unexpected() {
         usage_error(&["nosuch"], "unexpected argument 'nosuch'");
