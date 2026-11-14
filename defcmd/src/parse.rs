@@ -201,30 +201,7 @@ impl Parsed {
 mod tests {
     use super::*;
     use crate::spec::ParamSpec;
-
-    const fn positional(name: &'static str) -> ParamSpec {
-        ParamSpec {
-            name,
-            kind: ParamKind::Positional,
-            long: None,
-            doc: "",
-            type_name: <String as FromArg>::type_name,
-            possible_values: <String as FromArg>::possible_values,
-            default_display: None,
-        }
-    }
-
-    const fn switch(name: &'static str, long: &'static str) -> ParamSpec {
-        ParamSpec {
-            name,
-            kind: ParamKind::Switch,
-            long: Some(long),
-            doc: "",
-            type_name: <bool as FromArg>::type_name,
-            possible_values: <bool as FromArg>::possible_values,
-            default_display: None,
-        }
-    }
+    use crate::test_util::{positional, switch};
 
     // from, to (positionals), force and dry_run (switches).
     static PARAMS: [ParamSpec; 4] = [

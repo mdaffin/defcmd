@@ -3,6 +3,8 @@ extern crate self as defcmd;
 
 mod parse;
 mod spec;
+#[cfg(test)]
+mod test_util;
 mod value;
 
 pub use defcmd_macros::command;
