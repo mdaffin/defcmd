@@ -3,9 +3,16 @@ name = "defcmd"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+description = "A command is a plain function marked #[command]; its signature is the CLI, modelled on nushell."
+repository = "https://github.com/mdaffin/defcmd"
+readme = "../README.md"
+keywords = ["cli", "command-line", "nushell", "arguments", "macro"]
+categories = ["command-line-interface"]
+# Edition 2024 needs 1.85; not tested against an older toolchain.
+rust-version = "1.85"
 
 [dependencies]
-defcmd-macros = { path = "../defcmd-macros" }
+defcmd-macros = { path = "../defcmd-macros", version = "0.1.0" }
 inventory = "0.3"
 
 

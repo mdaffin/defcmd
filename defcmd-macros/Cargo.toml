@@ -3,6 +3,13 @@ name = "defcmd-macros"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+description = "Proc macros for defcmd. Use defcmd, not this crate."
+repository = "https://github.com/mdaffin/defcmd"
+readme = "../README.md"
+keywords = ["cli", "command-line", "nushell", "arguments", "macro"]
+categories = ["command-line-interface"]
+# Edition 2024 needs 1.85; not tested against an older toolchain.
+rust-version = "1.85"
 
 [lib]
 proc-macro = true
