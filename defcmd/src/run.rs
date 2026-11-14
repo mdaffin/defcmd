@@ -158,14 +158,17 @@ mod tests {
     }
 
     static OK: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &HELLO,
         run: glue_ok,
     };
     static BAD_VALUE: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &HELLO,
         run: glue_usage_error,
     };
     static NEVER: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &HELLO,
         run: glue_unreachable,
     };
@@ -277,7 +280,7 @@ mod tests {
         Ok(ExitCode::from(7))
     }
     inventory::submit! {
-        Registration { spec: &GLOBAL_SPEC, run: glue_global }
+        Registration { location: crate::spec::Location::UNKNOWN, spec: &GLOBAL_SPEC, run: glue_global }
     }
 
     #[test]
@@ -367,14 +370,17 @@ mod dispatch_tests {
         version: None,
     };
     static R_ROOT: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &ROOT,
         run: glue_root,
     };
     static R_GET: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &GET,
         run: glue_get,
     };
     static R_HAS: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &HAS,
         run: glue_has,
     };
@@ -396,10 +402,12 @@ mod dispatch_tests {
         version: None,
     };
     static R_GREET: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &GREET,
         run: glue_root,
     };
     static R_LIST: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &LIST,
         run: glue_get,
     };
@@ -517,6 +525,7 @@ mod dispatch_tests {
         version: None,
     };
     static R_REMOTE_ADD: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &REMOTE_ADD,
         run: glue_get,
     };
@@ -603,10 +612,12 @@ Flags:
         version: None,
     };
     static R_TODO: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &TODO,
         run: glue_todo,
     };
     static R_TODO_LIST: Registration = Registration {
+        location: crate::spec::Location::UNKNOWN,
         spec: &TODO_LIST,
         run: glue_todo_list,
     };
@@ -723,22 +734,27 @@ Flags:
         command(&["remote", "remove"], "Remove a remote list.", &[]);
     static R_NS: [Registration; 5] = [
         Registration {
+            location: crate::spec::Location::UNKNOWN,
             spec: &NS_REMOTE_REMOVE,
             run: glue_todo_list,
         },
         Registration {
+            location: crate::spec::Location::UNKNOWN,
             spec: &NS_LIST,
             run: glue_todo_list,
         },
         Registration {
+            location: crate::spec::Location::UNKNOWN,
             spec: &NS_MAIN,
             run: glue_todo,
         },
         Registration {
+            location: crate::spec::Location::UNKNOWN,
             spec: &NS_REMOTE_ADD,
             run: glue_todo_list,
         },
         Registration {
+            location: crate::spec::Location::UNKNOWN,
             spec: &NS_ADD,
             run: glue_todo_list,
         },

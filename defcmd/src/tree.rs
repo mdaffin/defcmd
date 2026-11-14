@@ -139,7 +139,11 @@ mod tests {
     static FAR: CommandSpec = spec(&["a", "b", "c"], "far");
 
     const fn reg(spec: &'static CommandSpec) -> Registration {
-        Registration { spec, run: glue }
+        Registration {
+            location: crate::spec::Location::UNKNOWN,
+            spec,
+            run: glue,
+        }
     }
     static R_ROOT: Registration = reg(&ROOT);
     static R_GET: Registration = reg(&GET);

@@ -16,7 +16,7 @@ pub use defcmd_macros::{FromArg, command};
 pub use output::Output;
 pub use parse::{Outcome, Parsed, UsageError, parse};
 pub use run::{try_run, try_run_with};
-pub use spec::{CommandSpec, ParamKind, ParamSpec, Registration};
+pub use spec::{CommandSpec, Location, ParamKind, ParamSpec, Registration};
 pub use validate::check;
 pub use value::{ArgError, FromArg, FromStrArg};
 

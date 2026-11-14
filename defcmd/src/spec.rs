@@ -65,10 +65,42 @@ pub struct CommandSpec {
     pub version: Option<&'static str>,
 }
 
+/// Where a command was declared: shown in start-up validation messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Location {
+    pub module: &'static str,
+    pub function: &'static str,
+    pub file: &'static str,
+    pub line: u32,
+}
+
+impl Location {
+    /// For registrations built by hand (tests).
+    pub const UNKNOWN: Location = Location {
+        module: "?",
+        function: "?",
+        file: "?",
+        line: 0,
+    };
+}
+
+impl std::fmt::Display for Location {
+    /// `module::function (file:line)`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}::{} ({}:{})",
+            self.module, self.function, self.file, self.line
+        )
+    }
+}
+
 /// What `#[command]` submits to the registry: the descriptor and the glue that converts the
 /// parsed values, calls the user's function and reports its result.
 pub struct Registration {
     pub spec: &'static CommandSpec,
+    /// Module path, function name and `file:line` of the command, for validation messages.
+    pub location: Location,
     /// Runs the command. `Err` is a usage error found while converting values; the `Ok` code is
     /// the exit code. Anything the command's result needs to report goes to the writer.
     pub run: fn(&Parsed, &mut dyn Write) -> Result<ExitCode, UsageError>,
@@ -78,6 +110,17 @@ inventory::collect!(Registration);
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_location_shows_module_function_file_and_line() {
+        let at = Location {
+            module: "app::cmds",
+            function: "copy",
+            file: "src/cmds.rs",
+            line: 12,
+        };
+        assert_eq!(at.to_string(), "app::cmds::copy (src/cmds.rs:12)");
+    }
+
     use super::*;
     use crate::FromArg;
 

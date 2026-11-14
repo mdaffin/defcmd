@@ -343,6 +343,7 @@ pub fn expand_sub(func: ItemFn, attr: CommandAttr) -> syn::Result<TokenStream> {
 fn expand(mut func: ItemFn, root: bool, attr: CommandAttr) -> syn::Result<TokenStream> {
     let CommandAttr { path, aliases } = attr;
     let command = Command::from_fn(&func)?;
+    let function_name = func.sig.ident.unraw().to_string();
     check_supported(&command)?;
     check_names(&command, std::env::var_os("CARGO_PKG_VERSION").is_some())?;
 
@@ -424,7 +425,16 @@ fn expand(mut func: ItemFn, root: bool, attr: CommandAttr) -> syn::Result<TokenS
             }
 
             ::defcmd::__private::inventory::submit! {
-                ::defcmd::Registration { spec: &__SPEC, run: __glue }
+                ::defcmd::Registration {
+                    spec: &__SPEC,
+                    location: ::defcmd::Location {
+                        module: ::core::module_path!(),
+                        function: #function_name,
+                        file: ::core::file!(),
+                        line: ::core::line!(),
+                    },
+                    run: __glue,
+                }
             }
         };
 

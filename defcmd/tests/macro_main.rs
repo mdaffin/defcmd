@@ -108,3 +108,20 @@ fn unknown_flag_is_a_usage_error() {
     assert_eq!(code, ExitCode::from(2));
     assert!(err.starts_with("Error: unknown flag '--nope'\n"));
 }
+
+#[test]
+fn the_registration_records_where_the_command_is() {
+    let regs: Vec<_> = defcmd::__private::inventory::iter::<defcmd::Registration>
+        .into_iter()
+        .collect();
+    assert_eq!(regs.len(), 1);
+    let location = regs[0].location;
+    assert_eq!(location.module, "macro_main::app");
+    assert_eq!(location.function, "main");
+    assert_eq!(location.file, file!());
+    assert!(location.line > 0);
+    assert_eq!(
+        location.to_string(),
+        format!("macro_main::app::main ({}:{})", file!(), location.line)
+    );
+}

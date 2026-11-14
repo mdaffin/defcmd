@@ -55,7 +55,11 @@ mod tests {
     }
 
     const fn reg(spec: &'static CommandSpec) -> Registration {
-        Registration { spec, run: glue }
+        Registration {
+            location: crate::spec::Location::UNKNOWN,
+            spec,
+            run: glue,
+        }
     }
     const fn spec(path: &'static [&'static str]) -> CommandSpec {
         CommandSpec {
