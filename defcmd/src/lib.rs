@@ -105,8 +105,11 @@ mod value;
 
 pub use defcmd_macros::{FromArg, command};
 pub use output::Output;
+// Used by generated code only: hidden from the docs so they are not mistaken for the API.
+#[doc(hidden)]
 pub use parse::{Parsed, UsageError};
 pub use run::{try_run, try_run_with};
+#[doc(hidden)]
 pub use spec::{CommandSpec, Location, ParamKind, ParamSpec, Registration};
 pub use validate::check;
 pub use value::{ArgError, FromArg, FromStrArg};
