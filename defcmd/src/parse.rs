@@ -97,6 +97,11 @@ pub fn parse(
             }
             seen_positional = true;
             match positionals.get(taken) {
+                // The rest positional keeps taking words and is never moved past.
+                Some(&p) if spec.params[p].rest => match &mut raw[p] {
+                    Raw::Values(values) => values.push(arg.clone()),
+                    absent => *absent = Raw::Values(vec![arg.clone()]),
+                },
                 Some(&p) => {
                     raw[p] = Raw::Values(vec![arg.clone()]);
                     taken += 1;
@@ -194,6 +199,7 @@ pub fn parse(
     // A required positional cannot follow an optional one, so only the next one needs a look.
     if let Some(&p) = positionals.get(taken)
         && !spec.params[p].optional
+        && !spec.params[p].rest
     {
         return Err(UsageError::new(format!(
             "missing required argument '{}'",
@@ -213,7 +219,20 @@ impl Parsed {
         let Some(value) = values.last() else {
             return Ok(None);
         };
-        T::from_arg(value).map(Some).map_err(|e| {
+        self.convert(index, value).map(Some)
+    }
+
+    /// Every value of parameter `index`, converted, in the order given; empty if there were none.
+    /// For the rest positional.
+    pub fn get_all<T: FromArg>(&self, index: usize) -> Result<Vec<T>, UsageError> {
+        let Raw::Values(values) = &self.raw[index] else {
+            return Ok(Vec::new());
+        };
+        values.iter().map(|v| self.convert(index, v)).collect()
+    }
+
+    fn convert<T: FromArg>(&self, index: usize, value: &OsStr) -> Result<T, UsageError> {
+        T::from_arg(value).map_err(|e| {
             let name = self.spec.params[index].display_name();
             // A value that is not UTF-8 cannot be quoted back faithfully, so it is left out.
             match value.to_str() {
@@ -238,7 +257,7 @@ impl Parsed {
 mod tests {
     use super::*;
     use crate::spec::ParamSpec;
-    use crate::test_util::{flag, optional, positional, switch, with_short};
+    use crate::test_util::{flag, optional, positional, rest, switch, with_short};
 
     // from, to (positionals), force and dry_run (switches).
     static PARAMS: [ParamSpec; 4] = [
@@ -440,6 +459,67 @@ mod tests {
         assert_eq!(
             run(&OPT, &["a", "b", "c"]).unwrap_err().to_string(),
             "unexpected argument 'c'"
+        );
+    }
+
+    // dest (required), files (rest), force (switch).
+    static REST_PARAMS: [ParamSpec; 3] = [
+        positional("dest"),
+        rest(positional("files")),
+        switch("force", "force"),
+    ];
+    static REST: CommandSpec = CommandSpec {
+        path: &["rm"],
+        aliases: &[],
+        doc: "",
+        params: &REST_PARAMS,
+        version: None,
+    };
+
+    fn rest_parsed(a: &[&str]) -> Parsed {
+        match run(&REST, a).unwrap() {
+            Outcome::Run(p) => p,
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rest_takes_zero_or_more() {
+        let p = rest_parsed(&["d"]);
+        assert_eq!(values(&p.raw[0]), ["d"]);
+        assert_eq!(p.raw[1], Raw::Absent);
+        let p = rest_parsed(&["d", "a", "--force", "b", "c"]);
+        assert_eq!(values(&p.raw[1]), ["a", "b", "c"]);
+        assert_eq!(values(&p.raw[2]), ["true"]);
+    }
+
+    #[test]
+    fn rest_does_not_make_the_earlier_positionals_optional() {
+        assert_eq!(
+            run(&REST, &[]).unwrap_err().to_string(),
+            "missing required argument 'dest'"
+        );
+    }
+
+    #[test]
+    fn everything_after_double_dash_goes_to_rest() {
+        let p = rest_parsed(&["d", "--", "-x", "--force", "--"]);
+        assert_eq!(values(&p.raw[1]), ["-x", "--force", "--"]);
+        assert_eq!(p.raw[2], Raw::Absent);
+    }
+
+    #[test]
+    fn get_all_converts_every_value() {
+        let p = rest_parsed(&["d", "1", "2"]);
+        assert_eq!(p.get_all::<u8>(1).unwrap(), [1, 2]);
+        assert_eq!(
+            rest_parsed(&["d"]).get_all::<u8>(1).unwrap(),
+            Vec::<u8>::new()
+        );
+        let e = rest_parsed(&["d", "1", "x"]).get_all::<u8>(1).unwrap_err();
+        assert!(
+            e.to_string().starts_with("invalid value 'x' for 'files': "),
+            "{e}"
         );
     }
 

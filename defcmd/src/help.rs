@@ -21,7 +21,9 @@ pub fn render_usage(spec: &CommandSpec, program: &str) -> String {
         .iter()
         .filter(|p| p.kind == ParamKind::Positional)
     {
-        if p.optional {
+        if p.rest {
+            line.push_str(&format!(" ...({})", p.name));
+        } else if p.optional {
             line.push_str(&format!(" ({})", p.name));
         } else {
             line.push_str(&format!(" <{}>", p.name));
@@ -65,7 +67,8 @@ fn flag_entry(p: &ParamSpec) -> String {
 /// `from <path>: Source file.`; an optional one ends in `(optional)` or `(optional, default: '.')`.
 /// Without a doc the note follows the head directly.
 fn parameter_entry(p: &ParamSpec) -> String {
-    let head = format!("{} <{}>", p.name, (p.type_name)());
+    let dots = if p.rest { "..." } else { "" };
+    let head = format!("{dots}{} <{}>", p.name, (p.type_name)());
     if !p.optional {
         return entry(head, p.doc);
     }
@@ -155,7 +158,7 @@ pub fn render_version(program: &str, version: &str) -> String {
 mod tests {
     use super::*;
     use crate::spec::ParamSpec;
-    use crate::test_util::{documented, flag, optional, positional, switch, with_short};
+    use crate::test_util::{documented, flag, optional, positional, rest, switch, with_short};
     use crate::value::FromArg;
 
     static HELLO_PARAMS: [ParamSpec; 2] = [
@@ -231,6 +234,35 @@ Parameters:
   label <string> (optional)
 ";
         assert_eq!(render_help(&COPY, "app", &[]), expected);
+    }
+
+    static RM_PARAMS: [ParamSpec; 2] = [
+        positional("dest"),
+        documented(rest(positional("files")), "Files to remove."),
+    ];
+    static RM: CommandSpec = CommandSpec {
+        path: &["rm"],
+        aliases: &[],
+        doc: "",
+        params: &RM_PARAMS,
+        version: None,
+    };
+
+    #[test]
+    fn rest_is_shown_with_dots_in_usage_and_parameters() {
+        assert_eq!(render_usage(&RM, "app"), "app rm <dest> ...(files)");
+        let expected = "\
+Usage:
+  > app rm <dest> ...(files)
+
+Flags:
+  -h, --help: Display the help message for this command
+
+Parameters:
+  dest <string>
+  ...files <string>: Files to remove.
+";
+        assert_eq!(render_help(&RM, "app", &[]), expected);
     }
 
     #[test]

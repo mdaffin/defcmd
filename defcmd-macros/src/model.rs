@@ -20,6 +20,8 @@ pub struct Param {
     pub doc: String,
     /// Marked `#[flag]`.
     pub flag: bool,
+    /// Marked `#[rest]`.
+    pub rest: bool,
     /// The long name given in `#[flag(--long)]`; the derived name is used when `None`.
     pub explicit_long: Option<String>,
     /// The short name given in `#[flag(-x)]`.
@@ -167,6 +169,7 @@ impl Command {
                 ));
             };
             let mut flag = false;
+            let mut rest = false;
             let mut names = FlagNames::default();
             let mut default = None;
             for attr in &pat_type.attrs {
@@ -188,6 +191,17 @@ impl Command {
                             ));
                         }
                     };
+                } else if attr.path().is_ident("rest") {
+                    if rest {
+                        return Err(syn::Error::new_spanned(attr, "duplicate `#[rest]`"));
+                    }
+                    let Meta::Path(_) = &attr.meta else {
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "`#[rest]` takes no arguments",
+                        ));
+                    };
+                    rest = true;
                 } else if attr.path().is_ident("default") {
                     if default.is_some() {
                         return Err(syn::Error::new_spanned(attr, "duplicate `#[default]`"));
@@ -215,6 +229,7 @@ impl Command {
                 name: pat.ident.unraw().to_string(),
                 doc: doc_of(&pat_type.attrs),
                 flag,
+                rest,
                 explicit_long: names.long,
                 short: names.short,
                 default,

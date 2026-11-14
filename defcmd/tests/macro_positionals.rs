@@ -43,6 +43,28 @@ mod app {
         ));
     }
 
+    /// Remove files.
+    #[command]
+    pub fn remove(
+        /// Files to remove.
+        #[rest]
+        files: Vec<PathBuf>,
+        #[flag] force: bool,
+    ) {
+        let files: Vec<_> = files.iter().map(|f| f.display().to_string()).collect();
+        note(format!("remove {files:?} force={force}"));
+    }
+
+    /// Add numbers.
+    #[command]
+    pub fn sum(
+        /// Start from this.
+        start: i64,
+        nums: Vec<i64>,
+    ) {
+        note(format!("sum {start} {nums:?}"));
+    }
+
     /// Count up.
     #[command]
     pub fn count(#[default(3)] times: u32) {
@@ -154,4 +176,50 @@ Parameters:
   label <string>: A note. (optional)
 ";
     assert_eq!(out, expected);
+}
+
+#[test]
+fn rest_collects_zero_or_more() {
+    ok(&["app", "remove"], "remove [] force=false");
+    ok(
+        &["app", "remove", "a", "b"],
+        "remove [\"a\", \"b\"] force=false",
+    );
+    ok(
+        &["app", "remove", "c", "--force", "d"],
+        "remove [\"c\", \"d\"] force=true",
+    );
+}
+
+#[test]
+fn after_double_dash_everything_is_a_rest_word() {
+    ok(
+        &["app", "remove", "--", "-odd", "--force", "x"],
+        "remove [\"-odd\", \"--force\", \"x\"] force=false",
+    );
+}
+
+#[test]
+fn a_plain_vec_positional_is_rest_too() {
+    ok(&["app", "sum", "1"], "sum 1 []");
+    ok(&["app", "sum", "1", "2", "3"], "sum 1 [2, 3]");
+    usage_error(&["app", "sum"], "missing required argument 'start'");
+}
+
+#[test]
+fn a_bad_rest_value_is_reported_against_the_parameter() {
+    usage_error(
+        &["app", "sum", "1", "2", "x"],
+        "invalid value 'x' for 'nums': expected int",
+    );
+}
+
+#[test]
+fn rest_help() {
+    let (_, out, _) = run(&["app", "remove", "--help"]);
+    assert!(out.contains("  > app remove {flags} ...(files)\n"), "{out}");
+    assert!(
+        out.contains("  ...files <path>: Files to remove.\n"),
+        "{out}"
+    );
 }

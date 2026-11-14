@@ -16,7 +16,33 @@ fn check_supported(command: &Command) -> syn::Result<()> {
         ))
     };
     let mut seen_optional = false;
+    let mut seen_rest = false;
     for p in &command.params {
+        if p.rest && (p.flag || p.default.is_some()) {
+            return Err(syn::Error::new_spanned(
+                &p.ty,
+                "`#[rest]` cannot be combined with `#[flag]` or `#[default]`",
+            ));
+        }
+        if p.rest && p.kind != TypeKind::Vec {
+            return Err(syn::Error::new_spanned(&p.ty, "`#[rest]` needs a `Vec<T>`"));
+        }
+        if !p.flag && seen_rest {
+            return Err(syn::Error::new_spanned(
+                &p.ty,
+                "the rest positional must be the last positional",
+            ));
+        }
+        if is_rest(p) {
+            seen_rest = true;
+            if p.default.is_some() {
+                return Err(syn::Error::new_spanned(
+                    &p.ty,
+                    "`#[default]` cannot be combined with a `Vec` positional",
+                ));
+            }
+            continue;
+        }
         if !p.flag {
             if is_optional(p) {
                 seen_optional = true;
@@ -56,10 +82,17 @@ fn is_optional(p: &Param) -> bool {
     !p.flag && (p.kind == TypeKind::Option || p.default.is_some())
 }
 
-/// The type `FromArg` converts to: `T` for `Option<T>` positionals, the type itself otherwise.
+/// The variadic positional: marked `#[rest]` or a `Vec<T>` that is not a flag.
+fn is_rest(p: &Param) -> bool {
+    !p.flag && (p.rest || p.kind == TypeKind::Vec)
+}
+
+/// The type `FromArg` converts to: `T` for `Option<T>` and rest positionals, the type itself
+/// otherwise.
 fn value_type(p: &Param) -> &Type {
     match (p.kind, inner_type(&p.ty)) {
         (TypeKind::Option, Some(inner)) => inner,
+        (TypeKind::Vec, Some(inner)) if is_rest(p) => inner,
         _ => &p.ty,
     }
 }
@@ -109,6 +142,7 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
     let doc = &p.doc;
     let ty = value_type(p);
     let optional = is_optional(p);
+    let rest = is_rest(p);
     let (kind, long) = if p.flag {
         let long = p
             .explicit_long
@@ -144,6 +178,7 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
             possible_values: <#ty as ::defcmd::FromArg>::possible_values,
             default_display: #default_display,
             optional: #optional,
+            rest: #rest,
         }
     }
 }
@@ -152,7 +187,10 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
 fn convert(index: usize, p: &Param) -> TokenStream {
     let ident = &p.ident;
     let ty = &p.ty;
-    if p.kind == TypeKind::Option && !p.flag {
+    if is_rest(p) {
+        let inner = value_type(p);
+        quote!(let #ident: #ty = __parsed.get_all::<#inner>(#index)?;)
+    } else if p.kind == TypeKind::Option && !p.flag {
         let inner = value_type(p);
         quote!(let #ident: #ty = __parsed.get_opt::<#inner>(#index)?;)
     } else if p.default.is_some() {
@@ -306,6 +344,45 @@ mod tests {
     fn default_cannot_be_combined_with_option() {
         let f: ItemFn = parse_quote! { fn main(#[default(None)] a: Option<String>) {} };
         assert_eq!(rejected(f), "`#[default]` cannot be combined with `Option`");
+    }
+
+    #[test]
+    fn rest_rules() {
+        let f: ItemFn = parse_quote! { fn main(a: Vec<String>, b: String) {} };
+        assert_eq!(
+            rejected(f),
+            "the rest positional must be the last positional"
+        );
+        let f: ItemFn = parse_quote! { fn main(#[rest] a: Vec<String>, b: Option<String>) {} };
+        assert_eq!(
+            rejected(f),
+            "the rest positional must be the last positional"
+        );
+        let f: ItemFn = parse_quote! { fn main(#[rest] a: String) {} };
+        assert_eq!(rejected(f), "`#[rest]` needs a `Vec<T>`");
+        let f: ItemFn = parse_quote! { fn main(#[rest] #[flag] a: Vec<String>) {} };
+        assert_eq!(
+            rejected(f),
+            "`#[rest]` cannot be combined with `#[flag]` or `#[default]`"
+        );
+        let f: ItemFn = parse_quote! { fn main(#[rest] #[default(vec![])] a: Vec<String>) {} };
+        assert_eq!(
+            rejected(f),
+            "`#[rest]` cannot be combined with `#[flag]` or `#[default]`"
+        );
+        let f: ItemFn = parse_quote! { fn main(#[default(vec![])] a: Vec<String>) {} };
+        assert_eq!(
+            rejected(f),
+            "`#[default]` cannot be combined with a `Vec` positional"
+        );
+    }
+
+    #[test]
+    fn rest_after_optional_positionals_is_fine() {
+        let f: ItemFn = parse_quote! { fn main(a: Option<String>, #[rest] b: Vec<String>) {} };
+        assert!(check_supported(&Command::from_fn(&f).unwrap()).is_ok());
+        let f: ItemFn = parse_quote! { fn main(a: String, b: Vec<u8>, #[flag] c: bool) {} };
+        assert!(check_supported(&Command::from_fn(&f).unwrap()).is_ok());
     }
 
     #[test]

@@ -14,6 +14,7 @@ pub const fn positional(name: &'static str) -> ParamSpec {
         possible_values: <String as FromArg>::possible_values,
         default_display: None,
         optional: false,
+        rest: false,
     }
 }
 
@@ -28,6 +29,7 @@ pub const fn switch(name: &'static str, long: &'static str) -> ParamSpec {
         possible_values: <bool as FromArg>::possible_values,
         default_display: None,
         optional: false,
+        rest: false,
     }
 }
 
@@ -60,4 +62,9 @@ pub const fn optional(p: ParamSpec) -> ParamSpec {
         optional: true,
         ..p
     }
+}
+
+/// `p` marked as the rest positional.
+pub const fn rest(p: ParamSpec) -> ParamSpec {
+    ParamSpec { rest: true, ..p }
 }

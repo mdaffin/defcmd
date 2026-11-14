@@ -34,6 +34,9 @@ pub struct ParamSpec {
     pub default_display: Option<fn() -> Option<String>>,
     /// A positional that may be left out (`Option<T>` or `#[default]`). Always false for flags.
     pub optional: bool,
+    /// The variadic positional: takes every remaining positional, zero or more. Must be the last
+    /// positional; its type is that of one element.
+    pub rest: bool,
 }
 
 impl ParamSpec {
@@ -85,6 +88,7 @@ mod tests {
             possible_values: <String as FromArg>::possible_values,
             default_display: None,
             optional: false,
+            rest: false,
         },
         ParamSpec {
             name: "dry_run",
@@ -96,6 +100,7 @@ mod tests {
             possible_values: <bool as FromArg>::possible_values,
             default_display: None,
             optional: false,
+            rest: false,
         },
     ];
 
