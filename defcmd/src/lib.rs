@@ -1,10 +1,12 @@
 // Lets generated code and in-crate tests refer to this crate as `::defcmd`.
 extern crate self as defcmd;
 
+mod parse;
 mod spec;
 mod value;
 
 pub use defcmd_macros::command;
+pub use parse::{Outcome, Parsed, UsageError, parse};
 pub use spec::{CommandSpec, ParamKind, ParamSpec};
 pub use value::{ArgError, FromArg};
 

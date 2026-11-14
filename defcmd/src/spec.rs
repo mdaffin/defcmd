@@ -11,6 +11,7 @@ pub enum ParamKind {
 }
 
 /// One parameter of a command.
+#[derive(Debug)]
 pub struct ParamSpec {
     /// The Rust parameter name (raw identifiers already stripped).
     pub name: &'static str,
@@ -35,6 +36,7 @@ impl ParamSpec {
 }
 
 /// One command (a function marked `#[command]`).
+#[derive(Debug)]
 pub struct CommandSpec {
     /// The command path, e.g. `["copy", "remove"]`. The root command is `[]`.
     pub path: &'static [&'static str],
