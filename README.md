@@ -49,6 +49,7 @@ parameter forms, return types and exit codes, and `defcmd/examples/` for runnabl
 | `flags_and_arguments.rs` | parameters, flags, parsing rules, alias |
 | `values.rs` | value types, enums, `FromStr` types, custom parsers |
 | `nushell_style.rs` | a subcommand tree from names |
+| `global_flags.rs` | root flags that every command accepts |
 | `errors.rs` | return types, errors, exit codes |
 
 ## Not for v1

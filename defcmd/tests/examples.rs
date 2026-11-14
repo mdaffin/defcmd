@@ -466,6 +466,98 @@ Flags:
     }
 }
 
+mod deploy {
+    use super::run;
+
+    fn deploy(args: &[&str]) -> super::Run {
+        run("deploy", "deploy", args)
+    }
+
+    fn ok(args: &[&str], stdout: &str) {
+        let r = deploy(args);
+        assert_eq!(
+            (r.code, r.stdout.as_str(), r.stderr.as_str()),
+            (0, stdout, ""),
+            "{args:?}"
+        );
+    }
+
+    #[test]
+    fn the_root_sees_the_global_flags() {
+        ok(
+            &[],
+            "deploy verbose=false dry_run=false env=staging local=false\n",
+        );
+        ok(
+            &["--dry-run", "-e", "prod", "-v", "--local"],
+            "deploy verbose=true dry_run=true env=prod local=true\n",
+        );
+    }
+
+    #[test]
+    fn a_global_flag_comes_before_or_after_the_subcommand_word() {
+        ok(&["push", "api"], "push api to staging\n");
+        for args in [
+            &["push", "api", "--env", "prod"][..],
+            &["--env", "prod", "push", "api"],
+            &["push", "--env=prod", "api"],
+            &["-e", "prod", "push", "api"],
+        ] {
+            ok(args, "push api to prod\n");
+        }
+        ok(
+            &["--dry-run", "push", "api", "-e", "prod"],
+            "would push api to prod\n",
+        );
+    }
+
+    #[test]
+    fn a_command_that_does_not_repeat_a_global_flag_still_accepts_it() {
+        ok(&["-v", "status"], "status\n");
+        ok(&["status", "--env", "prod", "--dry-run"], "status\n");
+    }
+
+    #[test]
+    fn a_root_flag_that_is_not_global_cannot_come_before_a_subcommand_word() {
+        let r = deploy(&["--local", "push", "api"]);
+        assert_eq!((r.code, r.stdout.as_str()), (2, ""));
+        assert!(
+            r.stderr
+                .starts_with("Error: flag '--local' has no effect before the subcommand 'push'\n"),
+            "{}",
+            r.stderr
+        );
+        let r = deploy(&["push", "api", "--local"]);
+        assert_eq!(r.code, 2);
+        assert!(r.stderr.starts_with("Error: unknown flag '--local'\n"));
+    }
+
+    #[test]
+    fn help_lists_the_globals_a_command_declares_and_those_it_only_accepts() {
+        let expected = "\
+Show what is deployed.
+
+Usage:
+  > deploy status {flags}
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+  -v, --verbose: Print extra detail.
+  --dry-run: Show what would happen without doing it.
+  -e, --env <string>: Environment to target. (default: 'staging')
+";
+        let r = deploy(&["status", "--help"]);
+        assert_eq!(
+            (r.code, r.stdout.as_str(), r.stderr.as_str()),
+            (0, expected, "")
+        );
+        let r = deploy(&["push", "--help"]);
+        assert_eq!(r.stdout.matches("--env").count(), 1, "{}", r.stdout);
+        assert_eq!(r.stdout.matches("--dry-run").count(), 1, "{}", r.stdout);
+    }
+}
+
 mod copy {
     use super::run;
 

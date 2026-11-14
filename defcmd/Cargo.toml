@@ -36,6 +36,11 @@ path = "examples/flags_and_arguments.rs"
 name = "fetch"
 path = "examples/values.rs"
 
+# And `deploy` for `examples/global_flags.rs`.
+[[example]]
+name = "deploy"
+path = "examples/global_flags.rs"
+
 # A deliberately invalid tree, run by `tests/examples.rs` to see start-up validation panic.
 [[example]]
 name = "clashing"
