@@ -271,6 +271,75 @@ pub fn parse_path(lit: &syn::LitStr) -> syn::Result<Vec<String>> {
     Ok(words)
 }
 
+/// What `#[command(..)]` says: an optional path string, then `alias = name` any number of times.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CommandAttr {
+    pub path: Option<Vec<String>>,
+    pub aliases: Vec<String>,
+}
+
+/// Parses the arguments of `#[command(..)]`: `"remote add", alias = rm, alias = "r-add"`.
+pub fn parse_command_attr(input: ParseStream) -> syn::Result<CommandAttr> {
+    let mut attr = CommandAttr::default();
+    let mut first = true;
+    while !input.is_empty() {
+        if input.peek(syn::LitStr) {
+            let lit: syn::LitStr = input.parse()?;
+            if !first {
+                return Err(syn::Error::new(
+                    lit.span(),
+                    "the path string must come first in `#[command(..)]`",
+                ));
+            }
+            attr.path = Some(parse_path(&lit)?);
+        } else {
+            let key = Ident::parse_any(input)?;
+            if key != "alias" {
+                return Err(syn::Error::new(
+                    key.span(),
+                    "`#[command(..)]` takes a path string, like \"remote add\", and `alias = name`",
+                ));
+            }
+            input.parse::<Token![=]>()?;
+            let (word, span) = if input.peek(syn::LitStr) {
+                let lit: syn::LitStr = input.parse()?;
+                (lit.value(), lit.span())
+            } else {
+                let ident = Ident::parse_any(input)?;
+                (ident.unraw().to_string(), ident.span())
+            };
+            check_alias(&word, span)?;
+            if attr.aliases.contains(&word) {
+                return Err(syn::Error::new(span, format!("duplicate alias `{word}`")));
+            }
+            attr.aliases.push(word);
+        }
+        first = false;
+        if !input.is_empty() {
+            input.parse::<Token![,]>()?;
+        }
+    }
+    Ok(attr)
+}
+
+/// An alias is one word: non-empty, no whitespace, not starting with `-`, not `main`.
+fn check_alias(word: &str, span: proc_macro2::Span) -> syn::Result<()> {
+    let bad = |why: &str| Err(syn::Error::new(span, format!("alias `{word}` {why}")));
+    if word.is_empty() {
+        return bad("must not be empty");
+    }
+    if word.chars().any(char::is_whitespace) {
+        return bad("must not contain whitespace");
+    }
+    if word.starts_with('-') {
+        return bad("must not start with `-`");
+    }
+    if word == "main" {
+        return bad("must not be `main`");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,5 +643,53 @@ mod path_tests {
         }
         assert!(path("main").unwrap_err().contains("main"));
         assert!(path("a -x").unwrap_err().contains("-x"));
+    }
+    fn attr(tokens: proc_macro2::TokenStream) -> Result<CommandAttr, String> {
+        syn::parse::Parser::parse2(parse_command_attr, tokens).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn command_attr_reads_path_and_aliases() {
+        let a = attr(quote::quote!(
+            "remote add",
+            alias = rm,
+            alias = "r-add",
+            alias = r#type
+        ))
+        .unwrap();
+        assert_eq!(a.path, Some(vec!["remote".to_string(), "add".to_string()]));
+        assert_eq!(a.aliases, ["rm", "r-add", "type"]);
+        assert_eq!(attr(quote::quote!()).unwrap(), CommandAttr::default());
+        assert_eq!(attr(quote::quote!(alias = rm)).unwrap().path, None);
+        // `fn` is a keyword and still a fine alias.
+        assert_eq!(attr(quote::quote!(alias = fn)).unwrap().aliases, ["fn"]);
+    }
+
+    #[test]
+    fn command_attr_rejects_bad_aliases_and_unknown_keys() {
+        let err = |t| attr(t).unwrap_err();
+        assert_eq!(err(quote::quote!(alias = "")), "alias `` must not be empty");
+        assert_eq!(
+            err(quote::quote!(alias = "a b")),
+            "alias `a b` must not contain whitespace"
+        );
+        assert_eq!(
+            err(quote::quote!(alias = "-x")),
+            "alias `-x` must not start with `-`"
+        );
+        assert_eq!(
+            err(quote::quote!(alias = main)),
+            "alias `main` must not be `main`"
+        );
+        assert_eq!(
+            err(quote::quote!(alias = rm, alias = rm)),
+            "duplicate alias `rm`"
+        );
+        assert_eq!(
+            err(quote::quote!(alias = rm, "a")),
+            "the path string must come first in `#[command(..)]`"
+        );
+        assert!(err(quote::quote!(name = x)).starts_with("`#[command(..)]` takes a path string"));
+        assert!(err(quote::quote!(alias rm)).contains("expected `=`"));
     }
 }

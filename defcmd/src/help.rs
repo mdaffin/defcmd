@@ -85,7 +85,10 @@ fn parameter_entry(p: &ParamSpec) -> String {
 
 /// One `Subcommands:` line: the full command line and the first line of the doc, if any.
 fn subcommand_entry(spec: &CommandSpec, program: &str) -> String {
-    let head = command_line(spec, program);
+    let mut head = command_line(spec, program);
+    for alias in spec.aliases {
+        head.push_str(&format!(", {alias}"));
+    }
     match spec.doc.lines().next() {
         Some(first) if !first.is_empty() => format!("  {head} - {first}"),
         _ => format!("  {head}"),
@@ -340,6 +343,36 @@ Flags:
         params: &[],
         version: None,
     };
+
+    static REMOVE: CommandSpec = CommandSpec {
+        path: &["copy", "remove"],
+        aliases: &["rm", "del"],
+        doc: "Remove files.\n\nMore.",
+        params: &[],
+        version: None,
+    };
+
+    #[test]
+    fn subcommand_aliases_follow_the_primary_path() {
+        let expected = "\
+Usage:
+  > app
+
+Subcommands:
+  app copy remove, rm, del - Remove files.
+
+Flags:
+  -h, --help: Display the help message for this command
+";
+        let root = CommandSpec {
+            path: &[],
+            aliases: &[],
+            doc: "",
+            params: &[],
+            version: None,
+        };
+        assert_eq!(render_help(&root, "app", &[&REMOVE]), expected);
+    }
 
     #[test]
     fn subcommands_are_listed_by_full_path_with_the_first_doc_line() {

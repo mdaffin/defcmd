@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 use syn::ext::IdentExt;
 use syn::{Expr, ExprLit, FnArg, ItemFn, Lit, Type};
 
-use crate::model::{Command, Param, TypeKind, inner_type};
+use crate::model::{Command, CommandAttr, Param, TypeKind, inner_type};
 
 /// Rejects parameter combinations that are not supported, so nothing is silently miscompiled.
 fn check_supported(command: &Command) -> syn::Result<()> {
@@ -210,16 +210,17 @@ pub fn command_name(ident: &syn::Ident) -> String {
 
 /// Expands the root command: `fn main` is renamed and the real entry point is emitted.
 pub fn expand_main(func: ItemFn) -> syn::Result<TokenStream> {
-    expand(func, true, None)
+    expand(func, true, CommandAttr::default())
 }
 
 /// Expands a subcommand: the function keeps its name and signature and is registered under `path`,
 /// or under the name derived from the function name when there is none.
-pub fn expand_sub(func: ItemFn, path: Option<Vec<String>>) -> syn::Result<TokenStream> {
-    expand(func, false, path)
+pub fn expand_sub(func: ItemFn, attr: CommandAttr) -> syn::Result<TokenStream> {
+    expand(func, false, attr)
 }
 
-fn expand(mut func: ItemFn, root: bool, path: Option<Vec<String>>) -> syn::Result<TokenStream> {
+fn expand(mut func: ItemFn, root: bool, attr: CommandAttr) -> syn::Result<TokenStream> {
+    let CommandAttr { path, aliases } = attr;
     let command = Command::from_fn(&func)?;
     check_supported(&command)?;
 
@@ -278,7 +279,7 @@ fn expand(mut func: ItemFn, root: bool, path: Option<Vec<String>>) -> syn::Resul
             static __PARAMS: [::defcmd::ParamSpec; #count] = [#(#specs),*];
             static __SPEC: ::defcmd::CommandSpec = ::defcmd::CommandSpec {
                 path: &[#(#path),*],
-                aliases: &[],
+                aliases: &[#(#aliases),*],
                 doc: #doc,
                 params: &__PARAMS,
                 version: ::core::option_env!("CARGO_PKG_VERSION"),

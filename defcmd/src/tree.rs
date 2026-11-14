@@ -97,9 +97,11 @@ impl<'a> Node<'a> {
         all
     }
 
-    /// The index in `children` of the child named exactly `word`.
+    /// The index in `children` of the child whose name or alias is exactly `word`.
     pub fn child_index(&self, word: &OsStr) -> Option<usize> {
-        self.children.iter().position(|c| word == name_of(c.spec))
+        self.children
+            .iter()
+            .position(|c| word == name_of(c.spec) || c.spec.aliases.iter().any(|a| word == *a))
     }
 }
 
@@ -223,6 +225,27 @@ mod tests {
             .collect();
         assert_eq!(paths, ["check", "get", "get deep"]);
         assert!(tree.children[0].descendants().is_empty());
+    }
+
+    static REMOVE: CommandSpec = CommandSpec {
+        aliases: &["rm", "del"],
+        ..spec(&["copy", "remove"], "remove")
+    };
+    static R_REMOVE: Registration = reg(&REMOVE);
+    static COPY_ROOT: CommandSpec = spec(&["copy"], "copy");
+    static R_COPY: Registration = reg(&COPY_ROOT);
+
+    #[test]
+    fn child_lookup_matches_the_name_or_an_alias_of_the_last_word() {
+        let tree = Node::build(&[&R_ROOT, &R_COPY, &R_REMOVE]).unwrap();
+        let copy = &tree.children[0];
+        assert_eq!(copy.child_index(OsStr::new("remove")), Some(0));
+        assert_eq!(copy.child_index(OsStr::new("rm")), Some(0));
+        assert_eq!(copy.child_index(OsStr::new("del")), Some(0));
+        assert_eq!(copy.child_index(OsStr::new("RM")), None);
+        // An alias replaces the last word only: the root does not know `rm`.
+        assert_eq!(tree.child_index(OsStr::new("rm")), None);
+        assert_eq!(tree.child_index(OsStr::new("copy")), Some(0));
     }
 
     #[test]
