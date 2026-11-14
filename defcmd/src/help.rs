@@ -81,6 +81,21 @@ pub fn render_help(spec: &CommandSpec, program: &str) -> String {
     text
 }
 
+/// A usage error as printed to stderr: an `Error:` line, then an indented `help:` line with the
+/// usage and a pointer to `--help`. Ends in a newline.
+pub fn render_usage_error(spec: &CommandSpec, program: &str, message: &str) -> String {
+    format!(
+        "Error: {message}\n  help: Usage: {}. Use `{} --help` for more information.\n",
+        render_usage(spec, program),
+        command_line(spec, program)
+    )
+}
+
+/// The `--version` output: `<name> <version>`, ending in a newline.
+pub fn render_version(program: &str, version: &str) -> String {
+    format!("{program} {version}\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +190,37 @@ Flags:
   -h, --help: Display the help message for this command
 ";
         assert_eq!(render_help(&BARE, "app"), expected);
+    }
+
+    #[test]
+    fn usage_error_has_an_error_line_and_a_help_line() {
+        // From the `errors.rs` example docs.
+        static PARAMS: [ParamSpec; 2] = [positional("file"), positional("key")];
+        static GET: CommandSpec = CommandSpec {
+            path: &["get"],
+            aliases: &[],
+            doc: "",
+            params: &PARAMS,
+            version: None,
+        };
+        assert_eq!(
+            render_usage_error(&GET, "conf", "missing required argument 'key'"),
+            "Error: missing required argument 'key'\n  \
+             help: Usage: conf get <file> <key>. Use `conf get --help` for more information.\n"
+        );
+    }
+
+    #[test]
+    fn usage_error_for_the_root_uses_the_program_name() {
+        assert_eq!(
+            render_usage_error(&HELLO, "hello", "unknown flag '--nope'"),
+            "Error: unknown flag '--nope'\n  \
+             help: Usage: hello {flags} <name>. Use `hello --help` for more information.\n"
+        );
+    }
+
+    #[test]
+    fn version_line() {
+        assert_eq!(render_version("hello", "1.0.0"), "hello 1.0.0\n");
     }
 }
