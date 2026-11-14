@@ -1,0 +1,5 @@
+error: the rest positional must be the last positional
+ --> tests/ui/rest_not_last.rs:4:47
+  |
+4 | fn copy(#[rest] sources: Vec<String>, target: String) {
+  |                                               ^^^^^^

@@ -39,3 +39,6 @@ doc_overindented_list_items = "allow"
 doc_lazy_continuation = "allow"
 # A command's signature is its CLI, so commands (and `examples/flags_and_arguments.rs`) can have many.
 too_many_arguments = "allow"
+
+[dev-dependencies]
+trybuild = "1.0.122"
