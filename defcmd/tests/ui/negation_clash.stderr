@@ -1,0 +1,5 @@
+error: the flag name `--no-color` is already used by `color`
+ --> tests/ui/negation_clash.rs:4:45
+  |
+4 | fn run(#[flag] color: Option<bool>, #[flag] no_color: bool) {
+  |                                             ^^^^^^^^

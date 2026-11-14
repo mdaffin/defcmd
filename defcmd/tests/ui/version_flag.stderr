@@ -1,0 +1,5 @@
+error: `--version` is generated for every command and cannot be redefined
+ --> tests/ui/version_flag.rs:4:16
+  |
+4 | fn run(#[flag] version: bool) {
+  |                ^^^^^^^

@@ -1,0 +1,5 @@
+error: the flag name `--out` is already used by `a`
+ --> tests/ui/long_name_clash.rs:4:47
+  |
+4 | fn run(#[flag(--out)] a: bool, #[flag(--out)] b: bool) {
+  |                                               ^

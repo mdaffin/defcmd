@@ -1,0 +1,5 @@
+error: `--help` is generated for every command and cannot be redefined
+ --> tests/ui/help_flag.rs:4:16
+  |
+4 | fn run(#[flag] help: bool) {
+  |                ^^^^

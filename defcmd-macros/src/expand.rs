@@ -31,10 +31,7 @@ fn check_supported(command: &Command) -> syn::Result<()> {
             ));
         }
         if p.flag {
-            let long = p
-                .explicit_long
-                .clone()
-                .unwrap_or_else(|| p.name.replace('_', "-"));
+            let long = long_name(p);
             if !valid_long_name(&long) {
                 return Err(syn::Error::new_spanned(
                     &p.ident,
@@ -98,6 +95,56 @@ fn check_supported(command: &Command) -> syn::Result<()> {
                 ));
             }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The long name of a flag parameter.
+fn long_name(p: &Param) -> String {
+    p.explicit_long
+        .clone()
+        .unwrap_or_else(|| p.name.replace('_', "-"))
+}
+
+/// Rejects flags whose names clash with each other or with the generated `--help` and (when
+/// `version_generated`) `--version`. A user `-h` or `-V` replaces the generated short form.
+fn check_names(command: &Command, version_generated: bool) -> syn::Result<()> {
+    // (name as written, owner) for every long name in use, including generated `--no-x`.
+    let mut longs: Vec<(String, &Param)> = Vec::new();
+    let mut shorts: Vec<(char, &Param)> = Vec::new();
+    for p in command.params.iter().filter(|p| p.flag) {
+        let long = long_name(p);
+        if long == "help" || (version_generated && long == "version") {
+            return Err(syn::Error::new_spanned(
+                &p.ident,
+                format!("`--{long}` is generated for every command and cannot be redefined"),
+            ));
+        }
+        let mut names = vec![long.clone()];
+        if is_tri_state(p) || (p.kind == TypeKind::Bool && p.default.is_some()) {
+            names.push(format!("no-{long}"));
+        }
+        for name in names {
+            if let Some((_, first)) = longs.iter().find(|(n, _)| *n == name) {
+                return Err(syn::Error::new_spanned(
+                    &p.ident,
+                    format!(
+                        "the flag name `--{name}` is already used by `{}`",
+                        first.name
+                    ),
+                ));
+            }
+            longs.push((name, p));
+        }
+        if let Some(c) = p.short {
+            if let Some((_, first)) = shorts.iter().find(|(s, _)| *s == c) {
+                return Err(syn::Error::new_spanned(
+                    &p.ident,
+                    format!("the short flag `-{c}` is already used by `{}`", first.name),
+                ));
+            }
+            shorts.push((c, p));
         }
     }
     Ok(())
@@ -194,10 +241,7 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
     let repeatable = p.flag && p.kind == TypeKind::Vec;
     let negatable = is_tri_state(p) || (p.flag && p.kind == TypeKind::Bool && p.default.is_some());
     let (kind, long) = if p.flag {
-        let long = p
-            .explicit_long
-            .clone()
-            .unwrap_or_else(|| p.name.replace('_', "-"));
+        let long = long_name(p);
         let kind = if p.kind == TypeKind::Bool || is_tri_state(p) {
             quote!(Switch)
         } else {
@@ -300,6 +344,7 @@ fn expand(mut func: ItemFn, root: bool, attr: CommandAttr) -> syn::Result<TokenS
     let CommandAttr { path, aliases } = attr;
     let command = Command::from_fn(&func)?;
     check_supported(&command)?;
+    check_names(&command, std::env::var_os("CARGO_PKG_VERSION").is_some())?;
 
     // The user's function keeps its body and signature, minus the parameter attributes that
     // only this macro understands (`#[flag]`, doc comments).
@@ -508,5 +553,47 @@ mod tests {
             fn main(a: String, #[default(1)] b: u8, c: Option<String>, #[flag] d: bool) {}
         };
         assert!(check_supported(&Command::from_fn(&f).unwrap()).is_ok());
+    }
+
+    fn names_error(f: ItemFn, version_generated: bool) -> Result<(), String> {
+        check_names(&Command::from_fn(&f).unwrap(), version_generated).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn help_is_always_reserved_and_version_only_when_generated() {
+        let f: ItemFn = parse_quote! { fn main(#[flag] help: bool) {} };
+        assert!(names_error(f.clone(), true).is_err());
+        assert!(names_error(f, false).is_err());
+        let f: ItemFn = parse_quote! { fn main(#[flag] version: bool) {} };
+        assert_eq!(
+            names_error(f.clone(), true).unwrap_err(),
+            "`--version` is generated for every command and cannot be redefined"
+        );
+        assert!(names_error(f, false).is_ok());
+    }
+
+    #[test]
+    fn user_short_h_and_v_replace_the_generated_short_forms() {
+        let f: ItemFn =
+            parse_quote! { fn main(#[flag(-h)] host: bool, #[flag(-V)] verbose: bool) {} };
+        assert!(names_error(f, true).is_ok());
+    }
+
+    #[test]
+    fn duplicate_names_are_rejected_including_generated_negations() {
+        let f: ItemFn = parse_quote! { fn main(#[flag(-x)] a: bool, #[flag(-x)] b: bool) {} };
+        assert_eq!(
+            names_error(f, true).unwrap_err(),
+            "the short flag `-x` is already used by `a`"
+        );
+        let f: ItemFn =
+            parse_quote! { fn main(#[flag] color: Option<bool>, #[flag] no_color: bool) {} };
+        assert_eq!(
+            names_error(f, true).unwrap_err(),
+            "the flag name `--no-color` is already used by `color`"
+        );
+        // Without a tri-state or default there is no `--no-color`, so this is fine.
+        let f: ItemFn = parse_quote! { fn main(#[flag] color: bool, #[flag] no_color: bool) {} };
+        assert!(names_error(f, true).is_ok());
     }
 }

@@ -1,0 +1,5 @@
+error: the short flag `-o` is already used by `out`
+ --> tests/ui/short_name_clash.rs:4:43
+  |
+4 | fn run(#[flag(-o)] out: bool, #[flag(-o)] other: bool) {
+  |                                           ^^^^^

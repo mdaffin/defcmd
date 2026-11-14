@@ -1,0 +1,5 @@
+error: the flag name `--dry-run` is already used by `a`
+ --> tests/ui/derived_name_clash.rs:4:44
+  |
+4 | fn run(#[flag(--dry-run)] a: bool, #[flag] dry_run: bool) {
+  |                                            ^^^^^^^
