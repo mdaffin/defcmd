@@ -3,6 +3,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// An opaque message describing why a value could not be parsed.
 ///
@@ -192,6 +193,83 @@ macro_rules! float_from_arg {
 }
 
 float_from_arg!(f32, f64);
+
+/// Nanoseconds per unit, largest first, for `Duration` parsing and display.
+const DURATION_UNITS: &[(&str, u128)] = &[
+    ("wk", 604_800_000_000_000),
+    ("day", 86_400_000_000_000),
+    ("hr", 3_600_000_000_000),
+    ("min", 60_000_000_000),
+    ("sec", 1_000_000_000),
+    ("ms", 1_000_000),
+    ("us", 1_000),
+    ("µs", 1_000),
+    ("ns", 1),
+];
+
+/// Splits `1.5min` into digits `1`, fraction `5` and unit `min`. No sign, no `_`, no exponent.
+fn split_duration(text: &str) -> Option<(&str, &str, &str)> {
+    let number_end = text
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(text.len());
+    let (number, unit) = text.split_at(number_end);
+    let (whole, fraction) = match number.split_once('.') {
+        Some((whole, fraction)) => (whole, fraction),
+        None => (number, ""),
+    };
+    let digits_only = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+    if (whole.is_empty() && fraction.is_empty()) || !digits_only(whole) || !digits_only(fraction) {
+        return None;
+    }
+    Some((whole, fraction, unit))
+}
+
+fn parse_duration(text: &str) -> Option<Duration> {
+    let (whole, fraction, unit) = split_duration(text)?;
+    let unit_ns = DURATION_UNITS.iter().find(|(name, _)| *name == unit)?.1;
+    let whole: u128 = if whole.is_empty() {
+        0
+    } else {
+        whole.parse().ok()?
+    };
+    // More than 18 fractional digits is far below a nanosecond for every unit; drop them.
+    let fraction = &fraction[..fraction.len().min(18)];
+    let fraction_ns = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse::<u128>().ok()? * unit_ns / 10u128.pow(fraction.len() as u32)
+    };
+    let total = whole.checked_mul(unit_ns)?.checked_add(fraction_ns)?;
+    let secs = u64::try_from(total / 1_000_000_000).ok()?;
+    Some(Duration::new(secs, (total % 1_000_000_000) as u32))
+}
+
+impl FromArg for Duration {
+    fn from_arg(arg: &OsStr) -> Result<Self, ArgError> {
+        arg.to_str()
+            .and_then(parse_duration)
+            .ok_or_else(|| ArgError::new("expected duration, like 30sec or 250ms"))
+    }
+
+    fn type_name() -> String {
+        "duration".to_string()
+    }
+
+    /// The largest unit that shows the value as a whole number: `90sec`, `2min`, `1500ms`.
+    fn display_arg(&self) -> Option<String> {
+        let total = self.as_nanos();
+        if total == 0 {
+            return Some("0sec".to_string());
+        }
+        let (name, unit_ns) = DURATION_UNITS
+            .iter()
+            .filter(|(name, _)| *name != "µs")
+            .find(|(_, unit_ns)| total.is_multiple_of(*unit_ns))
+            .copied()
+            .unwrap_or(("ns", 1));
+        Some(format!("{}{name}", total / unit_ns))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -430,5 +508,98 @@ mod tests {
         let raw = OsStr::from_bytes(b"\xfe\xff");
         assert_eq!(OsString::from_arg(raw).unwrap().as_bytes(), b"\xfe\xff");
         assert!(String::from_arg(raw).is_err());
+    }
+
+    #[test]
+    fn duration_accepts_number_and_unit() {
+        use std::time::Duration as D;
+        for (input, want) in [
+            ("30sec", D::from_secs(30)),
+            ("250ms", D::from_millis(250)),
+            ("1.5min", D::from_secs(90)),
+            ("1.5hr", D::from_secs(5400)),
+            (".5sec", D::from_millis(500)),
+            ("5.sec", D::from_secs(5)),
+            ("3ns", D::from_nanos(3)),
+            ("7us", D::from_micros(7)),
+            ("7µs", D::from_micros(7)),
+            ("2day", D::from_secs(172_800)),
+            ("1wk", D::from_secs(604_800)),
+            ("0sec", D::ZERO),
+            ("007ms", D::from_millis(7)),
+            ("0.000000001sec", D::from_nanos(1)),
+        ] {
+            assert_eq!(D::from_arg(os(input)).unwrap(), want, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn duration_rejects_everything_else() {
+        for bad in [
+            "",
+            "30",
+            "-30sec",
+            "+30sec",
+            "sec",
+            ".sec",
+            "1sec500ms",
+            "30SEC",
+            "30Sec",
+            "30s",
+            "30 sec",
+            " 30sec",
+            "30sec ",
+            "1.2.3sec",
+            "1e3sec",
+            "1_000sec",
+            "inf",
+            "30secs",
+            "99999999999999999999999999999999999999999999wk",
+        ] {
+            let err = Duration::from_arg(os(bad)).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "expected duration, like 30sec or 250ms",
+                "input {bad:?}"
+            );
+        }
+        assert!(Duration::from_arg(OsStr::from_bytes(b"1\xffsec")).is_err());
+    }
+
+    #[test]
+    fn duration_is_called_duration_and_displays_in_unit_syntax() {
+        use std::time::Duration as D;
+        assert_eq!(Duration::type_name(), "duration");
+        for (value, want) in [
+            (D::from_secs(30), "30sec"),
+            (D::from_secs(90), "90sec"),
+            (D::from_secs(120), "2min"),
+            (D::from_secs(7200), "2hr"),
+            (D::from_secs(86_400), "1day"),
+            (D::from_secs(1_209_600), "2wk"),
+            (D::from_millis(1500), "1500ms"),
+            (D::from_micros(1), "1us"),
+            (D::from_nanos(1500), "1500ns"),
+            (D::ZERO, "0sec"),
+        ] {
+            assert_eq!(value.display_arg().as_deref(), Some(want), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn duration_display_round_trips() {
+        use std::time::Duration as D;
+        for value in [
+            D::from_secs(30),
+            D::from_secs(90),
+            D::from_millis(1234),
+            D::from_nanos(1),
+            D::from_secs(3 * 604_800 + 5),
+            D::new(1_000_000, 999_999_999),
+            D::ZERO,
+        ] {
+            let shown = value.display_arg().unwrap();
+            assert_eq!(Duration::from_arg(os(&shown)).unwrap(), value, "{shown}");
+        }
     }
 }
