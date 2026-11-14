@@ -85,8 +85,8 @@
 //!   title <string>: What needs doing.
 //! ```
 //!
-//! The implicit group `remote` has no description, so `todo remote --help` (or `todo remote`,
-//! which also exits 2) starts at `Usage:`:
+//! The implicit group `remote` has no description, so `todo remote --help` starts at `Usage:`.
+//! `todo remote` on its own prints the same text to stderr and exits 2, since nothing ran:
 //!
 //! ```text
 //! Usage:

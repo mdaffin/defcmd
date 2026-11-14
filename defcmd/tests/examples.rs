@@ -423,11 +423,11 @@ Flags:
     }
 
     #[test]
-    fn a_group_prints_its_help_and_exits_2() {
+    fn a_group_prints_its_help_to_stderr_and_exits_2() {
         let r = todo(&["remote"]);
         assert_eq!(
             (r.code, r.stdout.as_str(), r.stderr.as_str()),
-            (2, REMOTE_HELP, "")
+            (2, "", REMOTE_HELP)
         );
     }
 

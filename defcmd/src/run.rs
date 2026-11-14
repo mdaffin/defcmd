@@ -88,9 +88,10 @@ pub(crate) fn run_registrations(
             }
             Ok(Outcome::Run(parsed)) => {
                 let Some(reg) = node.reg else {
-                    // An implicit group has no body: show its help, but as a failure.
+                    // An implicit group has no body: show its help, but as a failure, so on
+                    // stderr. Only `--help` prints help to stdout.
                     emit(
-                        out,
+                        err,
                         &render_help(spec, &program, &node.descendants(), &extra),
                     );
                     return ExitCode::from(2);
@@ -576,7 +577,7 @@ mod dispatch_tests {
     }
 
     #[test]
-    fn a_group_alone_prints_its_help_to_stdout_and_fails_with_2() {
+    fn a_group_alone_prints_its_help_to_stderr_and_fails_with_2() {
         let (code, out, err) = grouped(&["conf", "remote"]);
         assert_eq!(code, ExitCode::from(2));
         let expected = "\
@@ -590,8 +591,8 @@ Flags:
   -h, --help: Display the help message for this command
   -V, --version: Print the version
 ";
-        assert_eq!(out, expected);
-        assert_eq!(err, "");
+        assert_eq!(err, expected);
+        assert_eq!(out, "");
     }
 
     #[test]
@@ -872,10 +873,10 @@ Flags:
         let (code, out, err) = nushell(&["todo", "remote", "--help"]);
         assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, ""));
         assert_eq!(out, expected);
-        // Without `--help` the same text is printed, with exit 2 and no error line.
+        // Without `--help` the same text goes to stderr, with exit 2 and no error line.
         let (code, out, err) = nushell(&["todo", "remote"]);
-        assert_eq!((code, err.as_str()), (ExitCode::from(2), ""));
-        assert_eq!(out, expected);
+        assert_eq!((code, out.as_str()), (ExitCode::from(2), ""));
+        assert_eq!(err, expected);
     }
 }
 
