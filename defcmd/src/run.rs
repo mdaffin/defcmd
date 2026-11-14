@@ -31,12 +31,15 @@ fn usage_error(err: &mut dyn Write, spec: &CommandSpec, program: &str, message: 
 
 /// Runs the command that `args` select among `registrations`: the root, or the subcommand named
 /// by the leading words. The first item of `args` is the program name.
+/// Panics first if the tree is invalid (see `validate`).
 pub(crate) fn run_registrations(
     registrations: &[&Registration],
     args: &[OsString],
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> ExitCode {
+    // Clashes between commands only show at run time, so check on every start-up.
+    crate::validate::check_registrations(registrations);
     let program = program_name(args.first());
     let Some(tree) = Node::build(registrations) else {
         emit(err, "Error: no root command is registered\n");
@@ -172,6 +175,14 @@ mod tests {
         spec: &HELLO,
         run: glue_unreachable,
     };
+
+    #[test]
+    #[should_panic(expected = "invalid command tree:\n  - more than one root command (2)")]
+    fn an_invalid_tree_panics_before_anything_runs() {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let args = [OsString::from("prog")];
+        let _ = run_registrations(&[&OK, &NEVER], &args, &mut out, &mut err);
+    }
 
     fn run(reg: &Registration, args: &[&str]) -> (ExitCode, String, String) {
         let args: Vec<OsString> = args.iter().map(OsString::from).collect();
