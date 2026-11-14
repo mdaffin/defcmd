@@ -1211,6 +1211,64 @@ mod flag_form_tests {
     }
 
     #[test]
+    fn a_non_utf8_flag_value_is_reported_without_the_value() {
+        use std::os::unix::ffi::OsStringExt;
+        let bad = OsString::from_vec(b"a\xffb".to_vec());
+        let p = match parse(&SPEC, &["a".into(), "--jobs".into(), bad.clone()], &|_| {
+            None
+        }) {
+            Ok(Outcome::Run(p)) => p,
+            other => panic!("expected Run, got {other:?}"),
+        };
+        assert_eq!(
+            p.get_opt::<String>(2).unwrap_err().to_string(),
+            "invalid value for '--jobs': not valid UTF-8"
+        );
+        assert_eq!(p.get_opt::<OsString>(2).unwrap(), Some(bad));
+    }
+
+    #[test]
+    fn negative_numbers_and_flags_are_values_of_a_value_flag() {
+        let p = parsed(&["a", "--jobs", "-1"]);
+        assert_eq!(p.get_opt::<String>(2).unwrap().as_deref(), Some("-1"));
+        assert!(
+            p.get_opt::<usize>(2)
+                .unwrap_err()
+                .to_string()
+                .starts_with("invalid value '-1' for '--jobs'")
+        );
+        let p = parsed(&["a", "--jobs", "--force"]);
+        assert_eq!(p.get_opt::<String>(2).unwrap().as_deref(), Some("--force"));
+        assert_eq!(p.raw[3], Raw::Absent);
+        assert_eq!(err(&["a", "--jobs"]), "flag '--jobs' is missing its value");
+        assert_eq!(err(&["a", "-j"]), "flag '-j' is missing its value");
+    }
+
+    #[test]
+    fn help_beats_other_usage_errors_but_not_a_value_or_the_double_dash() {
+        assert!(matches!(
+            try_parse(&["--nope", "--help"]),
+            Ok(Outcome::Help)
+        ));
+        assert!(matches!(
+            try_parse(&["--help", "--nope"]),
+            Ok(Outcome::Help)
+        ));
+        assert!(try_parse(&["--jobs"]).is_err());
+        assert!(matches!(
+            try_parse(&["-fh", "--force=yes"]),
+            Ok(Outcome::Help)
+        ));
+        // Taken as the value of a flag, or after `--`, it is not help.
+        assert!(matches!(
+            try_parse(&["a", "-j", "--help"]),
+            Ok(Outcome::Run(_))
+        ));
+        assert_eq!(err(&["--", "--help", "b"]), "unexpected argument 'b'");
+        assert!(matches!(try_parse(&["--", "--help"]), Ok(Outcome::Run(_))));
+    }
+
+    #[test]
     fn plain_value_flag_still_keeps_the_last_value() {
         let p = parsed(&["a", "-j", "1", "-j", "2"]);
         assert_eq!(p.get_opt::<u8>(2).unwrap(), Some(2));
