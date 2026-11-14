@@ -118,12 +118,28 @@ pub fn render_help(spec: &CommandSpec, program: &str, descendants: &[&CommandSpe
         parts.push(format!("Subcommands:\n{}", lines.join("\n")));
     }
 
+    // A flag of the command that declares `-h` or `-V` replaces the generated short form.
+    let short_taken = |c: char| {
+        spec.params
+            .iter()
+            .any(|p| p.kind != ParamKind::Positional && p.short == Some(c))
+    };
+    let help_head = if short_taken('h') {
+        "--help"
+    } else {
+        "-h, --help"
+    };
     let mut flags = vec![entry(
-        "-h, --help".to_string(),
+        help_head.to_string(),
         "Display the help message for this command",
     )];
     if spec.version.is_some() {
-        flags.push(entry("-V, --version".to_string(), "Print the version"));
+        let head = if short_taken('V') {
+            "--version"
+        } else {
+            "-V, --version"
+        };
+        flags.push(entry(head.to_string(), "Print the version"));
     }
     flags.extend(
         spec.params
