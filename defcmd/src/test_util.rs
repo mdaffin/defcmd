@@ -16,6 +16,7 @@ pub const fn positional(name: &'static str) -> ParamSpec {
         optional: false,
         rest: false,
         repeatable: false,
+        negatable: false,
     }
 }
 
@@ -32,6 +33,7 @@ pub const fn switch(name: &'static str, long: &'static str) -> ParamSpec {
         optional: false,
         rest: false,
         repeatable: false,
+        negatable: false,
     }
 }
 
@@ -75,6 +77,14 @@ pub const fn rest(p: ParamSpec) -> ParamSpec {
 pub const fn repeatable(p: ParamSpec) -> ParamSpec {
     ParamSpec {
         repeatable: true,
+        ..p
+    }
+}
+
+/// `p` marked as a switch that also accepts `--no-<long>`.
+pub const fn negatable(p: ParamSpec) -> ParamSpec {
+    ParamSpec {
+        negatable: true,
         ..p
     }
 }

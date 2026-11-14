@@ -39,6 +39,8 @@ pub struct ParamSpec {
     pub rest: bool,
     /// A value flag that collects every occurrence (`Vec<T>`): `-x a -x b`.
     pub repeatable: bool,
+    /// A switch that also accepts `--no-<long>` (`Option<bool>`, or `bool` with a default).
+    pub negatable: bool,
 }
 
 impl ParamSpec {
@@ -92,6 +94,7 @@ mod tests {
             optional: false,
             rest: false,
             repeatable: false,
+            negatable: false,
         },
         ParamSpec {
             name: "dry_run",
@@ -105,6 +108,7 @@ mod tests {
             optional: false,
             rest: false,
             repeatable: false,
+            negatable: false,
         },
     ];
 

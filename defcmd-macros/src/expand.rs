@@ -147,6 +147,7 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
     let optional = is_optional(p);
     let rest = is_rest(p);
     let repeatable = p.flag && p.kind == TypeKind::Vec;
+    let negatable = is_tri_state(p) || (p.flag && p.kind == TypeKind::Bool && p.default.is_some());
     let (kind, long) = if p.flag {
         let long = p
             .explicit_long
@@ -184,6 +185,7 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
             optional: #optional,
             rest: #rest,
             repeatable: #repeatable,
+            negatable: #negatable,
         }
     }
 }
@@ -394,7 +396,12 @@ mod tests {
     #[test]
     fn option_and_vec_flags_are_supported() {
         let f: ItemFn = parse_quote! {
-            fn main(#[flag] a: Option<u8>, #[flag(-x)] b: Vec<String>, #[flag] c: Option<bool>) {}
+            fn main(
+                #[flag] a: Option<u8>,
+                #[flag(-x)] b: Vec<String>,
+                #[flag] c: Option<bool>,
+                #[flag] #[default(true)] d: bool,
+            ) {}
         };
         assert!(check_supported(&Command::from_fn(&f).unwrap()).is_ok());
     }

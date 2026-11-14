@@ -50,6 +50,9 @@ fn flag_entry(p: &ParamSpec) -> String {
         head.push_str(&format!("-{short}, "));
     }
     head.push_str(&p.display_name());
+    if p.negatable {
+        head.push_str(&format!(", --no-{}", p.long.unwrap_or(p.name)));
+    }
     if p.kind == ParamKind::Flag {
         head.push_str(&format!(" <{}>", (p.type_name)()));
     }
@@ -165,7 +168,7 @@ mod tests {
     use super::*;
     use crate::spec::ParamSpec;
     use crate::test_util::{
-        documented, flag, optional, positional, repeatable, rest, switch, with_short,
+        documented, flag, negatable, optional, positional, repeatable, rest, switch, with_short,
     };
     use crate::value::FromArg;
 
@@ -517,6 +520,40 @@ Flags:
   -x, --exclude <string>: Skip files matching a pattern. (repeatable)
   --include <string> (repeatable)
   --retries <int>: Retry count.
+";
+        assert_eq!(render_help(&SPEC, "app", &[]), expected);
+    }
+
+    fn truthy() -> Option<String> {
+        Some("true".to_string())
+    }
+
+    #[test]
+    fn negatable_switches_list_both_spellings() {
+        static PARAMS: [ParamSpec; 3] = [
+            ParamSpec {
+                default_display: Some(truthy),
+                ..documented(negatable(switch("color", "color")), "Coloured output.")
+            },
+            documented(negatable(switch("links", "links")), "Follow symlinks."),
+            with_short(negatable(switch("quiet", "quiet")), 'q'),
+        ];
+        static SPEC: CommandSpec = CommandSpec {
+            path: &[],
+            aliases: &[],
+            doc: "",
+            params: &PARAMS,
+            version: None,
+        };
+        let expected = "\
+Usage:
+  > app {flags}
+
+Flags:
+  -h, --help: Display the help message for this command
+  --color, --no-color: Coloured output. (default: true)
+  --links, --no-links: Follow symlinks.
+  -q, --quiet, --no-quiet
 ";
         assert_eq!(render_help(&SPEC, "app", &[]), expected);
     }

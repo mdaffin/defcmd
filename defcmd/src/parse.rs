@@ -116,6 +116,8 @@ pub fn parse(
             after_double_dash = true;
         } else {
             // `shown` is the flag as the user wrote it (without any `=value`), for messages.
+            // `negated` is set when `--no-x` named the negatable switch `x`.
+            let mut negated = false;
             let (found, shown, inline): (Option<usize>, String, Option<&OsStr>) =
                 if let Some(body) = bytes.strip_prefix(b"--") {
                     let (name, inline) = match body.iter().position(|&b| b == b'=') {
@@ -129,10 +131,23 @@ pub fn parse(
                     if inline.is_none() && name == "version" && spec.version.is_some() {
                         return Ok(Outcome::Version);
                     }
-                    let found = spec
-                        .params
-                        .iter()
-                        .position(|p| p.kind != ParamKind::Positional && p.long == Some(&*name));
+                    let by_long = |wanted: &str, negatable_only: bool| {
+                        spec.params.iter().position(|p| {
+                            p.kind != ParamKind::Positional
+                                && p.long == Some(wanted)
+                                && (p.negatable || !negatable_only)
+                        })
+                    };
+                    let mut found = by_long(&name, false);
+                    // `--no-x` is the negation of a negatable `x`, unless a switch is really
+                    // called `--no-x`. A negation takes no `=value`.
+                    if found.is_none()
+                        && inline.is_none()
+                        && let Some(base) = name.strip_prefix("no-")
+                    {
+                        found = by_long(base, true);
+                        negated = found.is_some();
+                    }
                     (found, format!("--{name}"), inline)
                 } else {
                     let text = arg.to_string_lossy();
@@ -159,7 +174,11 @@ pub fn parse(
                         .get_or_insert_with(|| UsageError::new(format!("unknown flag '{shown}'")));
                 }
                 Some(p) if spec.params[p].kind == ParamKind::Switch => {
-                    let value = inline.unwrap_or(OsStr::new("true"));
+                    let value = match (inline, negated) {
+                        (_, true) => OsStr::new("false"),
+                        (Some(v), false) => v,
+                        (None, false) => OsStr::new("true"),
+                    };
                     match bool::from_arg(value) {
                         Ok(b) => raw[p] = Raw::Values(vec![b.to_string().into()]),
                         Err(e) => {
@@ -901,7 +920,7 @@ mod tests {
 mod flag_form_tests {
     use super::*;
     use crate::spec::ParamSpec;
-    use crate::test_util::{flag, positional, repeatable, switch, with_short};
+    use crate::test_util::{flag, negatable, positional, repeatable, switch, with_short};
 
     // to (positional), exclude (repeatable value flag, -x), jobs (value flag, -j), force (-f).
     static PARAMS: [ParamSpec; 4] = [
@@ -955,6 +974,91 @@ mod flag_form_tests {
     #[test]
     fn absent_repeatable_flag_is_empty() {
         assert!(parsed(&["a"]).get_all::<String>(1).unwrap().is_empty());
+    }
+
+    // to (positional), color (negatable, -c), links (negatable), plain (switch), no_plain (switch).
+    static NEG_PARAMS: [ParamSpec; 5] = [
+        positional("to"),
+        negatable(with_short(switch("color", "color"), 'c')),
+        negatable(switch("links", "links")),
+        switch("plain", "plain"),
+        switch("no_plain", "no-plain"),
+    ];
+    static NEG: CommandSpec = CommandSpec {
+        path: &["copy"],
+        aliases: &[],
+        doc: "",
+        params: &NEG_PARAMS,
+        version: None,
+    };
+
+    fn neg(a: &[&str]) -> Result<Parsed, String> {
+        match parse(&NEG, &args(a), &|_| None) {
+            Ok(Outcome::Run(p)) => Ok(p),
+            Ok(other) => panic!("expected Run, got {other:?}"),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn state(p: &Parsed, i: usize) -> Option<bool> {
+        p.get_opt::<bool>(i).unwrap()
+    }
+
+    #[test]
+    fn negatable_switch_accepts_no_prefix_and_every_switch_spelling() {
+        let at = |a: &[&str]| state(&neg(&[&["x"], a].concat()).unwrap(), 1);
+        assert_eq!(at(&[]), None);
+        assert_eq!(at(&["--color"]), Some(true));
+        assert_eq!(at(&["--no-color"]), Some(false));
+        assert_eq!(at(&["--color=true"]), Some(true));
+        assert_eq!(at(&["--color=false"]), Some(false));
+        assert_eq!(at(&["-c"]), Some(true));
+        assert_eq!(at(&["--color", "--no-color"]), Some(false));
+        assert_eq!(at(&["--no-color", "--color"]), Some(true));
+    }
+
+    #[test]
+    fn there_is_no_short_form_of_the_negation() {
+        assert_eq!(neg(&["x", "-C"]).unwrap_err(), "unknown flag '-C'");
+    }
+
+    #[test]
+    fn negation_takes_no_value() {
+        assert_eq!(
+            neg(&["x", "--no-color=true"]).unwrap_err(),
+            "unknown flag '--no-color'"
+        );
+    }
+
+    #[test]
+    fn a_negatable_switch_does_not_take_the_next_argument() {
+        // `false` is the next positional, not the switch value.
+        assert_eq!(
+            neg(&["x", "--links", "false"]).unwrap_err(),
+            "unexpected argument 'false'"
+        );
+    }
+
+    #[test]
+    fn plain_switch_has_no_negation_but_a_no_named_switch_is_itself() {
+        assert_eq!(
+            neg(&["x", "--no-links"]).map(|p| state(&p, 2)),
+            Ok(Some(false))
+        );
+        assert_eq!(
+            neg(&["x", "--no-plain"]).map(|p| state(&p, 4)),
+            Ok(Some(true))
+        );
+        assert_eq!(neg(&["x", "--no-plain"]).map(|p| state(&p, 3)), Ok(None));
+    }
+
+    #[test]
+    fn only_negatable_switches_get_the_prefix() {
+        // `plain` is not negatable, and `--no-plain` is its own switch (param 4), not `plain`.
+        assert_eq!(
+            neg(&["x", "--no-to"]).unwrap_err(),
+            "unknown flag '--no-to'"
+        );
     }
 
     #[test]

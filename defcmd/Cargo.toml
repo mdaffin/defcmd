@@ -22,3 +22,5 @@ path = "examples/nushell_style.rs"
 [lints.clippy]
 # `examples/errors.rs` is a verbatim copy of the documented example, which is not edited.
 doc_overindented_list_items = "allow"
+# A command's signature is its CLI, so commands (and `examples/flags_and_arguments.rs`) can have many.
+too_many_arguments = "allow"
