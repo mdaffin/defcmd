@@ -13,7 +13,7 @@ pub fn command_line(spec: &CommandSpec, program: &str) -> String {
 /// positionals. For example `copy {flags} <from>`.
 pub fn render_usage(spec: &CommandSpec, program: &str) -> String {
     let mut line = command_line(spec, program);
-    if spec.params.iter().any(|p| p.kind == ParamKind::Switch) {
+    if spec.params.iter().any(|p| p.kind != ParamKind::Positional) {
         line.push_str(" {flags}");
     }
     for p in spec
@@ -35,8 +35,27 @@ fn entry(head: String, doc: &str) -> String {
     }
 }
 
+/// `-j, --jobs <int>: Number of jobs. (default: 4)`. Switches have no type; the default is
+/// shown only when the parameter has an explicit one. Without a doc the default follows the head
+/// directly.
 fn flag_entry(p: &ParamSpec) -> String {
-    entry(p.display_name(), p.doc)
+    let mut head = String::new();
+    if let Some(short) = p.short {
+        head.push_str(&format!("-{short}, "));
+    }
+    head.push_str(&p.display_name());
+    if p.kind == ParamKind::Flag {
+        head.push_str(&format!(" <{}>", (p.type_name)()));
+    }
+    let default = p
+        .default_display
+        .and_then(|show| show())
+        .map(|d| format!("(default: {d})"));
+    match (p.doc.is_empty(), default) {
+        (_, None) => entry(head, p.doc),
+        (true, Some(d)) => format!("  {head} {d}"),
+        (false, Some(d)) => entry(head, &format!("{} {d}", p.doc)),
+    }
 }
 
 fn parameter_entry(p: &ParamSpec) -> String {
@@ -79,7 +98,7 @@ pub fn render_help(spec: &CommandSpec, program: &str, descendants: &[&CommandSpe
     flags.extend(
         spec.params
             .iter()
-            .filter(|p| p.kind == ParamKind::Switch)
+            .filter(|p| p.kind != ParamKind::Positional)
             .map(flag_entry),
     );
     parts.push(format!("Flags:\n{}", flags.join("\n")));
@@ -118,7 +137,8 @@ pub fn render_version(program: &str, version: &str) -> String {
 mod tests {
     use super::*;
     use crate::spec::ParamSpec;
-    use crate::test_util::{documented, positional, switch};
+    use crate::test_util::{documented, flag, positional, switch, with_short};
+    use crate::value::FromArg;
 
     static HELLO_PARAMS: [ParamSpec; 2] = [
         documented(positional("name"), "Who to greet."),
@@ -239,6 +259,115 @@ Flags:
   -h, --help: Display the help message for this command
 ";
         assert_eq!(render_help(&BARE, "conf", &[&CHECK, &GET_DEEP]), expected);
+    }
+
+    fn one() -> Option<String> {
+        <u8 as FromArg>::display_arg(&1)
+    }
+
+    fn none() -> Option<String> {
+        None
+    }
+
+    const fn int_flag(p: ParamSpec) -> ParamSpec {
+        ParamSpec {
+            type_name: <u8 as FromArg>::type_name,
+            ..p
+        }
+    }
+
+    // The `todo add` block of `examples/nushell_style.rs`.
+    static ADD_PARAMS: [ParamSpec; 2] = [
+        documented(positional("title"), "What needs doing."),
+        documented(
+            ParamSpec {
+                default_display: Some(one),
+                ..with_short(int_flag(flag("priority", "priority")), 'p')
+            },
+            "1 (low) to 3 (high).",
+        ),
+    ];
+    static ADD: CommandSpec = CommandSpec {
+        path: &["add"],
+        aliases: &[],
+        doc: "Add an item.",
+        params: &ADD_PARAMS,
+        version: Some("1.0.0"),
+    };
+
+    #[test]
+    fn value_flag_help_matches_the_nushell_style_example() {
+        let expected = "\
+Add an item.
+
+Usage:
+  > todo add {flags} <title>
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+  -p, --priority <int>: 1 (low) to 3 (high). (default: 1)
+
+Parameters:
+  title <string>: What needs doing.
+";
+        assert_eq!(render_help(&ADD, "todo", &[]), expected);
+    }
+
+    static MIXED_PARAMS: [ParamSpec; 6] = [
+        with_short(
+            documented(switch("verbose", "verbose"), "Print extra detail."),
+            'v',
+        ),
+        documented(int_flag(flag("jobs", "jobs")), "Number of jobs."),
+        ParamSpec {
+            default_display: Some(one),
+            ..int_flag(flag("retries", "retries"))
+        },
+        ParamSpec {
+            default_display: Some(none),
+            ..documented(flag("name", "name"), "Display name.")
+        },
+        with_short(flag("out_dir", "out-dir"), 'o'),
+        documented(switch("dry_run", "dry-run"), "Do not write."),
+    ];
+    static MIXED: CommandSpec = CommandSpec {
+        path: &[],
+        aliases: &[],
+        doc: "",
+        params: &MIXED_PARAMS,
+        version: None,
+    };
+
+    #[test]
+    fn flags_are_listed_in_declaration_order_with_short_names_types_and_defaults() {
+        let expected = "\
+Usage:
+  > app {flags}
+
+Flags:
+  -h, --help: Display the help message for this command
+  -v, --verbose: Print extra detail.
+  --jobs <int>: Number of jobs.
+  --retries <int> (default: 1)
+  --name <string>: Display name.
+  -o, --out-dir <string>
+  --dry-run: Do not write.
+";
+        assert_eq!(render_help(&MIXED, "app", &[]), expected);
+    }
+
+    #[test]
+    fn only_value_flags_still_get_the_flags_marker() {
+        static PARAMS: [ParamSpec; 1] = [flag("jobs", "jobs")];
+        static ONLY: CommandSpec = CommandSpec {
+            path: &[],
+            aliases: &[],
+            doc: "",
+            params: &PARAMS,
+            version: None,
+        };
+        assert_eq!(render_usage(&ONLY, "app"), "app {flags}");
     }
 
     #[test]

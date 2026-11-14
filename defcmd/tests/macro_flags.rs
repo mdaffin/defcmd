@@ -184,3 +184,30 @@ fn the_function_stays_an_ordinary_function() {
         "build z jobs=1 dir=q quiet=false dry=false type=t offset=0"
     ));
 }
+
+#[test]
+fn generated_help_lists_flags_with_short_names_types_and_defaults() {
+    let (code, out, err) = run(&["app", "build", "--help"]);
+    assert_eq!(code, ExitCode::SUCCESS);
+    assert_eq!(err, "");
+    let expected = "\
+Compile a target.
+
+Usage:
+  > app build {flags} <target>
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+  -j, --jobs <int>: Parallel jobs. (default: 4)
+  -o, --out-dir <path>: Where the output goes. (default: 'target')
+  -q, --quiet: Print less.
+  --dry-run
+  --type <string> (default: 'none')
+  --offset <int> (default: -3)
+
+Parameters:
+  target <string>: What to build.
+";
+    assert_eq!(out, expected);
+}
