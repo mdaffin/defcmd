@@ -29,6 +29,11 @@ path = "examples/flags_and_arguments.rs"
 name = "fetch"
 path = "examples/values.rs"
 
+# A deliberately invalid tree, run by `tests/examples.rs` to see start-up validation panic.
+[[example]]
+name = "clashing"
+path = "tests/fixtures/clashing.rs"
+
 [lints.rust]
 # `examples/values.rs` is verbatim: rustc ignores the derived `Debug` read of `Percent(u8)`.
 dead_code = "allow"

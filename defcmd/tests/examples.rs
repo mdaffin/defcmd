@@ -841,3 +841,41 @@ Parameters:
         ok(&["--help"], HELP);
     }
 }
+
+/// Start-up validation of the command tree: the one place a deliberate panic is
+/// tested end to end.
+mod clashing {
+    use super::run;
+
+    #[test]
+    fn an_invalid_tree_panics_with_every_problem_and_exit_101() {
+        for args in [&[][..], &["get"], &["--help"]] {
+            let r = run("clashing", "clashing", args);
+            assert_eq!((r.code, r.stdout.as_str()), (101, ""), "{args:?}");
+            assert!(r.stderr.contains("invalid command tree:\n"), "{}", r.stderr);
+            assert!(
+                r.stderr
+                    .contains("  - command 'get' is registered 2 times: clashing::first ("),
+                "{}",
+                r.stderr
+            );
+            assert!(
+                r.stderr
+                    .contains("clashing::second (defcmd/tests/fixtures/clashing.rs:")
+            );
+            assert!(
+                r.stderr.contains(
+                    "  - the name 'remote' is used by both command 'push' (clashing::push ("
+                ),
+                "{}",
+                r.stderr
+            );
+            assert!(
+                r.stderr
+                    .contains("group 'remote' (implied by clashing::remote_add ("),
+                "{}",
+                r.stderr
+            );
+        }
+    }
+}
