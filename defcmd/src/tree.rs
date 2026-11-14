@@ -2,7 +2,7 @@
 
 use std::ffi::OsStr;
 
-use crate::spec::Registration;
+use crate::spec::{CommandSpec, Registration};
 
 /// One command and the commands directly below it, sorted by name.
 pub(crate) struct Node<'a> {
@@ -41,6 +41,17 @@ impl<'a> Node<'a> {
             reg,
             children: children.into_iter().map(|c| Node::grow(c, regs)).collect(),
         }
+    }
+
+    /// Every command below this one, parents before their children, siblings sorted by name:
+    /// sorted by path.
+    pub fn descendants(&self) -> Vec<&'static CommandSpec> {
+        let mut all = Vec::new();
+        for child in &self.children {
+            all.push(child.reg.spec);
+            all.extend(child.descendants());
+        }
+        all
     }
 
     /// The index in `children` of the child named exactly `word`.
@@ -123,6 +134,18 @@ mod tests {
         let tree = Node::build(&[&R_ROOT, &R_GET, &R_AGAIN]).unwrap();
         assert_eq!(tree.children.len(), 1);
         assert_eq!(tree.children[0].reg.spec.doc, "get");
+    }
+
+    #[test]
+    fn descendants_are_flattened_in_path_order() {
+        let tree = Node::build(&[&R_GET, &R_DEEP, &R_CHECK, &R_ROOT]).unwrap();
+        let paths: Vec<_> = tree
+            .descendants()
+            .iter()
+            .map(|s| s.path.join(" "))
+            .collect();
+        assert_eq!(paths, ["check", "get", "get deep"]);
+        assert!(tree.children[0].descendants().is_empty());
     }
 
     #[test]

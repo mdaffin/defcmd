@@ -49,7 +49,7 @@ pub(crate) fn run_registrations(
         let spec = node.reg.spec;
         match parse(spec, &rest, &|word| node.child_index(word)) {
             Ok(Outcome::Help) => {
-                emit(out, &render_help(spec, &program));
+                emit(out, &render_help(spec, &program, &node.descendants()));
                 return ExitCode::SUCCESS;
             }
             Ok(Outcome::Version) => {

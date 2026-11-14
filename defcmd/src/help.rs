@@ -43,13 +43,31 @@ fn parameter_entry(p: &ParamSpec) -> String {
     entry(format!("{} <{}>", p.name, (p.type_name)()), p.doc)
 }
 
+/// One `Subcommands:` line: the full command line and the first line of the doc, if any.
+fn subcommand_entry(spec: &CommandSpec, program: &str) -> String {
+    let head = command_line(spec, program);
+    match spec.doc.lines().next() {
+        Some(first) if !first.is_empty() => format!("  {head} - {first}"),
+        _ => format!("  {head}"),
+    }
+}
+
 /// The full `--help` text, ending in a newline. Parts that have nothing to say are left out.
-pub fn render_help(spec: &CommandSpec, program: &str) -> String {
+/// `descendants` are all commands below `spec`, already sorted by path.
+pub fn render_help(spec: &CommandSpec, program: &str, descendants: &[&CommandSpec]) -> String {
     let mut parts: Vec<String> = Vec::new();
     if !spec.doc.is_empty() {
         parts.push(spec.doc.to_string());
     }
     parts.push(format!("Usage:\n  > {}", render_usage(spec, program)));
+
+    if !descendants.is_empty() {
+        let lines: Vec<String> = descendants
+            .iter()
+            .map(|d| subcommand_entry(d, program))
+            .collect();
+        parts.push(format!("Subcommands:\n{}", lines.join("\n")));
+    }
 
     let mut flags = vec![entry(
         "-h, --help".to_string(),
@@ -158,7 +176,7 @@ Flags:
 Parameters:
   name <string>: Who to greet.
 ";
-        assert_eq!(render_help(&HELLO, "hello"), expected);
+        assert_eq!(render_help(&HELLO, "hello", &[]), expected);
     }
 
     #[test]
@@ -177,7 +195,7 @@ Flags:
 Parameters:
   key <string>
 ";
-        assert_eq!(render_help(&NESTED, "app"), expected);
+        assert_eq!(render_help(&NESTED, "app", &[]), expected);
     }
 
     #[test]
@@ -189,7 +207,38 @@ Usage:
 Flags:
   -h, --help: Display the help message for this command
 ";
-        assert_eq!(render_help(&BARE, "app"), expected);
+        assert_eq!(render_help(&BARE, "app", &[]), expected);
+    }
+
+    static CHECK: CommandSpec = CommandSpec {
+        path: &["check"],
+        aliases: &[],
+        doc: "Check a file.\n\nMore detail.",
+        params: &[],
+        version: None,
+    };
+    static GET_DEEP: CommandSpec = CommandSpec {
+        path: &["get", "deep"],
+        aliases: &[],
+        doc: "",
+        params: &[],
+        version: None,
+    };
+
+    #[test]
+    fn subcommands_are_listed_by_full_path_with_the_first_doc_line() {
+        let expected = "\
+Usage:
+  > conf
+
+Subcommands:
+  conf check - Check a file.
+  conf get deep
+
+Flags:
+  -h, --help: Display the help message for this command
+";
+        assert_eq!(render_help(&BARE, "conf", &[&CHECK, &GET_DEEP]), expected);
     }
 
     #[test]
