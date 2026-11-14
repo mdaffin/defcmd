@@ -127,6 +127,97 @@ impl Lookup {
     }
 }
 
+/// What an argument that starts with `-` (and is not `--`) names.
+enum Flagged<'a> {
+    /// `--help` or `-h`, not taken by a flag of the command.
+    Help,
+    /// `--version` or `-V`, when the command has a version and no flag takes the name.
+    Version,
+    /// One entry per flag named by the argument: a long flag, or each letter of a short bundle.
+    /// `shown` is the flag as the user wrote it (without any `=value`).
+    Uses(Vec<Use<'a>>),
+}
+
+/// Splits `arg`, a flag or a bundle of short flags, into the flags it names.
+fn flag_uses<'a>(arg: &'a OsStr, look: &Lookup) -> Flagged<'a> {
+    let bytes = arg.as_encoded_bytes();
+    let has_version = look.spec.version.is_some();
+    let mut uses: Vec<Use> = Vec::new();
+    if let Some(body) = bytes.strip_prefix(b"--") {
+        let (name, inline) = match body.iter().position(|&b| b == b'=') {
+            Some(eq) => (&body[..eq], Some(OsStr::from_bytes(&body[eq + 1..]))),
+            None => (body, None),
+        };
+        let name = String::from_utf8_lossy(name);
+        if inline.is_none() && name == "help" {
+            return Flagged::Help;
+        }
+        if inline.is_none() && name == "version" && has_version {
+            return Flagged::Version;
+        }
+        let mut found = look.by_long(&name, false);
+        let mut negated = false;
+        // `--no-x` is the negation of a negatable `x`, unless a switch is really
+        // called `--no-x`. A negation takes no `=value`.
+        if found.is_none()
+            && inline.is_none()
+            && let Some(base) = name.strip_prefix("no-")
+        {
+            found = look.by_long(base, true);
+            negated = found.is_some();
+        }
+        uses.push(Use {
+            found,
+            shown: format!("--{name}"),
+            inline,
+            negated,
+            not_last: false,
+        });
+        return Flagged::Uses(uses);
+    }
+    // Short flags bundle (`-rf` is `-r -f`) but never take an attached value, so
+    // `-j8` and `-j=8` are a value flag that is not last.
+    // Lossy text would show U+FFFD for the bad bytes, which cannot be quoted back
+    // faithfully, so a flag that is not UTF-8 is shown as such.
+    let text = arg
+        .to_str()
+        .map_or_else(|| "<not valid UTF-8>".into(), std::borrow::Cow::Borrowed);
+    // An `=` is not a flag letter: `-j=8` and `-f=false` are unknown as a whole.
+    let letters: Vec<char> = if text.contains('=') || arg.to_str().is_none() {
+        Vec::new()
+    } else {
+        text[1..].chars().collect()
+    };
+    if letters.is_empty() {
+        uses.push(Use {
+            found: None,
+            shown: text.to_string(),
+            inline: None,
+            negated: false,
+            not_last: false,
+        });
+    }
+    for (k, &c) in letters.iter().enumerate() {
+        let found = look.by_short(c);
+        if found.is_none() && c == 'h' {
+            return Flagged::Help;
+        }
+        if found.is_none() && c == 'V' && has_version {
+            return Flagged::Version;
+        }
+        let not_last = k + 1 < letters.len()
+            && found.is_some_and(|t| look.param_of(t).kind == ParamKind::Flag);
+        uses.push(Use {
+            found,
+            shown: format!("-{c}"),
+            inline: None,
+            negated: false,
+            not_last,
+        });
+    }
+    Flagged::Uses(uses)
+}
+
 /// Parse `args` (without the command word itself) against `spec`, with no global flags.
 #[cfg(test)]
 pub(crate) fn parse(
@@ -208,81 +299,11 @@ pub(crate) fn parse_with_globals(
         } else if bytes == b"--" {
             after_double_dash = true;
         } else {
-            // One entry per flag named by this argument: a long flag, or each letter of a short
-            // bundle. `shown` is the flag as the user wrote it (without any `=value`).
-            let mut uses: Vec<Use> = Vec::new();
-            if let Some(body) = bytes.strip_prefix(b"--") {
-                let (name, inline) = match body.iter().position(|&b| b == b'=') {
-                    Some(eq) => (&body[..eq], Some(OsStr::from_bytes(&body[eq + 1..]))),
-                    None => (body, None),
-                };
-                let name = String::from_utf8_lossy(name);
-                if inline.is_none() && name == "help" {
-                    return Ok(Outcome::Help);
-                }
-                if inline.is_none() && name == "version" && spec.version.is_some() {
-                    return Ok(Outcome::Version);
-                }
-                let mut found = look.by_long(&name, false);
-                let mut negated = false;
-                // `--no-x` is the negation of a negatable `x`, unless a switch is really
-                // called `--no-x`. A negation takes no `=value`.
-                if found.is_none()
-                    && inline.is_none()
-                    && let Some(base) = name.strip_prefix("no-")
-                {
-                    found = look.by_long(base, true);
-                    negated = found.is_some();
-                }
-                uses.push(Use {
-                    found,
-                    shown: format!("--{name}"),
-                    inline,
-                    negated,
-                    not_last: false,
-                });
-            } else {
-                // Short flags bundle (`-rf` is `-r -f`) but never take an attached value, so
-                // `-j8` and `-j=8` are a value flag that is not last.
-                // Lossy text would show U+FFFD for the bad bytes, which cannot be quoted back
-                // faithfully, so a flag that is not UTF-8 is shown as such.
-                let text = arg
-                    .to_str()
-                    .map_or_else(|| "<not valid UTF-8>".into(), std::borrow::Cow::Borrowed);
-                // An `=` is not a flag letter: `-j=8` and `-f=false` are unknown as a whole.
-                let letters: Vec<char> = if text.contains('=') || arg.to_str().is_none() {
-                    Vec::new()
-                } else {
-                    text[1..].chars().collect()
-                };
-                if letters.is_empty() {
-                    uses.push(Use {
-                        found: None,
-                        shown: text.to_string(),
-                        inline: None,
-                        negated: false,
-                        not_last: false,
-                    });
-                }
-                for (k, &c) in letters.iter().enumerate() {
-                    let found = look.by_short(c);
-                    if found.is_none() && c == 'h' {
-                        return Ok(Outcome::Help);
-                    }
-                    if found.is_none() && c == 'V' && spec.version.is_some() {
-                        return Ok(Outcome::Version);
-                    }
-                    let not_last = k + 1 < letters.len()
-                        && found.is_some_and(|t| look.param_of(t).kind == ParamKind::Flag);
-                    uses.push(Use {
-                        found,
-                        shown: format!("-{c}"),
-                        inline: None,
-                        negated: false,
-                        not_last,
-                    });
-                }
-            }
+            let uses = match flag_uses(arg, &look) {
+                Flagged::Help => return Ok(Outcome::Help),
+                Flagged::Version => return Ok(Outcome::Version),
+                Flagged::Uses(uses) => uses,
+            };
             for u in uses {
                 let Use {
                     found,
