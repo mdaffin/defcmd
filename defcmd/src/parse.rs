@@ -17,6 +17,7 @@ pub struct UsageError {
 }
 
 impl UsageError {
+    /// Builds the error from any message.
     pub fn new(message: impl fmt::Display) -> Self {
         UsageError {
             message: message.to_string(),
@@ -47,15 +48,21 @@ pub struct Parsed {
     pub(crate) raw: Vec<Raw>,
 }
 
+/// What parsing the arguments of one command decided.
 #[derive(Debug)]
 pub enum Outcome {
+    /// Run the command with these values.
     Run(Parsed),
+    /// `--help` or `-h` was given.
     Help,
+    /// `--version` or `-V` was given.
     Version,
     /// The first positional named child `index` (as returned by the callback); `rest` are the
     /// arguments after that word.
     Sub {
+        /// Index of the child.
         index: usize,
+        /// The remaining arguments.
         rest: Vec<OsString>,
     },
 }

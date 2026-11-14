@@ -7,6 +7,7 @@ use std::process::ExitCode;
 /// A command's return value, turned into an exit code. Anything that needs reporting (an `Err`)
 /// is written to `err`.
 pub trait Output {
+    /// Reports the value to `err` if needed and returns the exit code.
     fn report(self, err: &mut dyn Write) -> ExitCode;
 }
 

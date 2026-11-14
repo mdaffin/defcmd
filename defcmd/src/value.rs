@@ -17,6 +17,7 @@ pub struct ArgError {
 }
 
 impl ArgError {
+    /// Builds the error from any message.
     pub fn new(message: impl fmt::Display) -> Self {
         ArgError {
             message: message.to_string(),
@@ -34,6 +35,7 @@ impl std::error::Error for ArgError {}
 
 /// A type that can be parsed from a single command-line argument.
 pub trait FromArg: Sized {
+    /// Parses one argument.
     fn from_arg(arg: &OsStr) -> Result<Self, ArgError>;
 
     /// The accepted spellings, for help and error messages. Empty means "any".

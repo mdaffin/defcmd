@@ -22,13 +22,17 @@ pub enum ParamKind {
 pub struct ParamSpec {
     /// The Rust parameter name (raw identifiers already stripped).
     pub name: &'static str,
+    /// Positional, switch or value flag.
     pub kind: ParamKind,
     /// Long flag name without the dashes. `None` for positionals.
     pub long: Option<&'static str>,
     /// Short flag name without the dash. `None` for positionals and flags without one.
     pub short: Option<char>,
+    /// The doc comment, verbatim.
     pub doc: &'static str,
+    /// The type as shown in help (`FromArg::type_name`).
     pub type_name: fn() -> String,
+    /// The accepted spellings (`FromArg::possible_values`); empty means any.
     pub possible_values: fn() -> &'static [&'static str],
     /// Renders the default for help; `None` if the parameter has no explicit default.
     pub default_display: Option<fn() -> Option<String>>,
@@ -58,8 +62,11 @@ impl ParamSpec {
 pub struct CommandSpec {
     /// The command path, e.g. `["copy", "remove"]`. The root command is `[]`.
     pub path: &'static [&'static str],
+    /// Other names for the last word of `path`.
     pub aliases: &'static [&'static str],
+    /// The doc comment, verbatim.
     pub doc: &'static str,
+    /// The parameters in declaration order.
     pub params: &'static [ParamSpec],
     /// The crate version, if `--version` / `-V` is generated for this command.
     pub version: Option<&'static str>,
@@ -68,9 +75,13 @@ pub struct CommandSpec {
 /// Where a command was declared: shown in start-up validation messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Location {
+    /// Module path.
     pub module: &'static str,
+    /// Function name.
     pub function: &'static str,
+    /// Source file, as `file!()` gives it.
     pub file: &'static str,
+    /// Line of the `#[command]` attribute.
     pub line: u32,
 }
 
@@ -98,6 +109,7 @@ impl std::fmt::Display for Location {
 /// What `#[command]` submits to the registry: the descriptor and the glue that converts the
 /// parsed values, calls the user's function and reports its result.
 pub struct Registration {
+    /// The command descriptor.
     pub spec: &'static CommandSpec,
     /// Module path, function name and `file:line` of the command, for validation messages.
     pub location: Location,

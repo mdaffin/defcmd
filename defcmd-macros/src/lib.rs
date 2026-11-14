@@ -1,3 +1,7 @@
+//! Proc macros for [`defcmd`](https://docs.rs/defcmd). Depend on `defcmd`, which re-exports
+//! [`command`] and `FromArg`; this crate is not used directly.
+#![warn(missing_docs)]
+
 mod derive;
 mod expand;
 mod model;
