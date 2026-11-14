@@ -3,6 +3,7 @@ extern crate self as defcmd;
 
 #[allow(dead_code)] // used by `try_run_with` in M3.4
 mod help;
+mod output;
 mod parse;
 mod spec;
 #[cfg(test)]
@@ -10,6 +11,7 @@ mod test_util;
 mod value;
 
 pub use defcmd_macros::command;
+pub use output::Output;
 pub use parse::{Outcome, Parsed, UsageError, parse};
 pub use spec::{CommandSpec, ParamKind, ParamSpec};
 pub use value::{ArgError, FromArg};
