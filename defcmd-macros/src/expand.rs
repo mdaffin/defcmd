@@ -286,6 +286,7 @@ fn param_spec(index: usize, p: &Param) -> TokenStream {
             rest: #rest,
             repeatable: #repeatable,
             negatable: #negatable,
+            global: false,
         }
     }
 }

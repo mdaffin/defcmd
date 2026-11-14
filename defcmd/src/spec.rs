@@ -45,6 +45,9 @@ pub struct ParamSpec {
     pub repeatable: bool,
     /// A switch that also accepts `--no-<long>` (`Option<bool>`, or `bool` with a default).
     pub negatable: bool,
+    /// A flag of the root command that every command accepts, before or after the subcommand
+    /// word. A subcommand lists it too, with the same names, to receive the value.
+    pub global: bool,
 }
 
 impl ParamSpec {
@@ -150,6 +153,7 @@ mod tests {
             rest: false,
             repeatable: false,
             negatable: false,
+            global: false,
         },
         ParamSpec {
             name: "dry_run",
@@ -164,6 +168,7 @@ mod tests {
             rest: false,
             repeatable: false,
             negatable: false,
+            global: false,
         },
     ];
 

@@ -17,6 +17,7 @@ pub const fn positional(name: &'static str) -> ParamSpec {
         rest: false,
         repeatable: false,
         negatable: false,
+        global: false,
     }
 }
 
@@ -34,6 +35,7 @@ pub const fn switch(name: &'static str, long: &'static str) -> ParamSpec {
         rest: false,
         repeatable: false,
         negatable: false,
+        global: false,
     }
 }
 
@@ -87,4 +89,9 @@ pub const fn negatable(p: ParamSpec) -> ParamSpec {
         negatable: true,
         ..p
     }
+}
+
+/// `p` marked as a global flag.
+pub const fn global(p: ParamSpec) -> ParamSpec {
+    ParamSpec { global: true, ..p }
 }
