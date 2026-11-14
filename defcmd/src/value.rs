@@ -732,4 +732,52 @@ mod tests {
         assert_eq!(default_type_name::<std::num::NonZeroU32>(), "nonzero");
         assert_eq!(default_type_name::<Vec<u8>>(), "vec");
     }
+
+    #[derive(Debug, PartialEq, crate::FromArg)]
+    enum Mode {
+        Fast,
+        Careful,
+        FastAndLoose,
+    }
+
+    #[test]
+    fn derived_enum_parses_kebab_names_exactly() {
+        assert_eq!(Mode::from_arg(os("fast")).unwrap(), Mode::Fast);
+        assert_eq!(Mode::from_arg(os("careful")).unwrap(), Mode::Careful);
+        assert_eq!(
+            Mode::from_arg(os("fast-and-loose")).unwrap(),
+            Mode::FastAndLoose
+        );
+        for bad in [
+            "Fast",
+            "FAST",
+            "slow",
+            "",
+            "FastAndLoose",
+            "fast_and_loose",
+            " fast",
+        ] {
+            let err = Mode::from_arg(os(bad)).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "expected one of: fast, careful, fast-and-loose",
+                "{bad:?}"
+            );
+        }
+        assert!(Mode::from_arg(OsStr::from_bytes(b"\xff")).is_err());
+    }
+
+    #[test]
+    fn derived_enum_describes_itself() {
+        assert_eq!(
+            Mode::possible_values(),
+            ["fast", "careful", "fast-and-loose"]
+        );
+        assert_eq!(Mode::type_name(), "fast|careful|fast-and-loose");
+        assert_eq!(Mode::Fast.display_arg().as_deref(), Some("'fast'"));
+        assert_eq!(
+            Mode::FastAndLoose.display_arg().as_deref(),
+            Some("'fast-and-loose'")
+        );
+    }
 }

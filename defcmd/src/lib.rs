@@ -12,7 +12,7 @@ mod tree;
 mod validate;
 mod value;
 
-pub use defcmd_macros::command;
+pub use defcmd_macros::{FromArg, command};
 pub use output::Output;
 pub use parse::{Outcome, Parsed, UsageError, parse};
 pub use run::{try_run, try_run_with};
