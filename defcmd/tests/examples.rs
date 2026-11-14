@@ -460,3 +460,223 @@ Flags:
         assert!(r.stdout.starts_with("List items.\n"), "{}", r.stdout);
     }
 }
+
+mod copy {
+    use super::run;
+
+    fn copy(args: &[&str]) -> super::Run {
+        run("copy", "copy", args)
+    }
+
+    const DEFAULTS: &str =
+        "force=false dry_run=false jobs=4 retries=None color=true exclude=[] links=None";
+
+    /// The line `copy` prints for `from` -> `to`, with `changes` applied to the default flags.
+    fn copied(from: &str, to: &str, changes: &[(&str, &str)]) -> String {
+        let mut flags = DEFAULTS.to_string();
+        for (from, to) in changes {
+            assert!(flags.contains(from), "{from} is not in {flags}");
+            flags = flags.replace(from, to);
+        }
+        format!("copy {from:?} -> {to:?} {flags}\n")
+    }
+
+    fn ok(args: &[&str], expected: &str) {
+        let r = copy(args);
+        assert_eq!(
+            (r.code, r.stdout.as_str(), r.stderr.as_str()),
+            (0, expected, ""),
+            "{args:?}"
+        );
+    }
+
+    fn usage_error(args: &[&str], message: &str) {
+        let r = copy(args);
+        assert_eq!(r.code, 2, "{args:?}");
+        assert_eq!(r.stdout, "", "{args:?}");
+        assert!(
+            r.stderr.starts_with(&format!("Error: {message}\n")),
+            "{args:?}: {}",
+            r.stderr
+        );
+    }
+
+    #[test]
+    fn the_command_list_of_the_docs() {
+        ok(&["a.txt"], &copied("a.txt", ".", &[]));
+        ok(
+            &["a.txt", "b.txt", "--force", "-j", "8"],
+            &copied(
+                "a.txt",
+                "b.txt",
+                &[("force=false", "force=true"), ("jobs=4", "jobs=8")],
+            ),
+        );
+        ok(
+            &["a.txt", "b.txt", "--retries", "5", "--no-color"],
+            &copied(
+                "a.txt",
+                "b.txt",
+                &[
+                    ("retries=None", "retries=Some(5)"),
+                    ("color=true", "color=false"),
+                ],
+            ),
+        );
+        ok(
+            &["--dry-run", "a.txt", "b.txt"],
+            &copied("a.txt", "b.txt", &[("dry_run=false", "dry_run=true")]),
+        );
+        let removed = "\
+remove \"a.txt\" recursive=true force=false
+remove \"b.txt\" recursive=true force=false
+remove \"c.txt\" recursive=true force=false
+";
+        ok(
+            &["remove", "a.txt", "b.txt", "c.txt", "--recursive"],
+            removed,
+        );
+        ok(&["rm", "a.txt", "b.txt", "c.txt", "--recursive"], removed);
+    }
+
+    #[test]
+    fn flag_syntax_lines_of_the_docs() {
+        let jobs8 = copied("a.txt", ".", &[("jobs=4", "jobs=8")]);
+        ok(&["a.txt", "--jobs", "8"], &jobs8);
+        ok(&["a.txt", "--jobs=8"], &jobs8);
+        ok(&["a.txt", "-j", "8"], &jobs8);
+        usage_error(
+            &["a.txt", "-j8"],
+            "flag '-j' takes a value, so it must be last in a bundle",
+        );
+        usage_error(&["a.txt", "-j=8"], "unknown flag '-j=8'");
+
+        let rf = "remove \"a.txt\" recursive=true force=true\nremove \"b.txt\" recursive=true force=true\n";
+        ok(&["remove", "-rf", "a.txt", "b.txt"], rf);
+        ok(&["rm", "-rf", "a.txt", "b.txt"], rf);
+        ok(
+            &["a.txt", "-fj", "8"],
+            &copied(
+                "a.txt",
+                ".",
+                &[("force=false", "force=true"), ("jobs=4", "jobs=8")],
+            ),
+        );
+        usage_error(
+            &["a.txt", "-jf", "8"],
+            "flag '-j' takes a value, so it must be last in a bundle",
+        );
+        ok(
+            &["a.txt", "-j", "1", "-j", "2"],
+            &copied("a.txt", ".", &[("jobs=4", "jobs=2")]),
+        );
+        ok(&["a.txt", "--force=false"], &copied("a.txt", ".", &[]));
+        usage_error(
+            &["a.txt", "--force=yes"],
+            "invalid value 'yes' for '--force': expected bool",
+        );
+        let odd = "remove \"-odd-name.txt\" recursive=false force=false\n";
+        ok(&["remove", "--", "-odd-name.txt"], odd);
+        ok(&["rm", "--", "-odd-name.txt"], odd);
+        // A file called `remove`: after `--` it is not the subcommand.
+        ok(&["--", "remove"], &copied("remove", ".", &[]));
+        usage_error(&["-5"], "unknown flag '-5'");
+        ok(&["--", "-5"], &copied("-5", ".", &[]));
+        usage_error(
+            &["a.txt", "--jobs", "-1"],
+            "invalid value '-1' for '--jobs': expected int",
+        );
+        usage_error(
+            &["a.txt", "--jobs", "--force"],
+            "invalid value '--force' for '--jobs': expected int",
+        );
+        usage_error(&["a.txt", "--jobs"], "flag '--jobs' is missing its value");
+    }
+
+    #[test]
+    fn repeated_negatable_and_tri_state_lines_of_the_docs() {
+        ok(
+            &["a.txt", "-x", "*.tmp", "-x", "*.bak"],
+            &copied(
+                "a.txt",
+                ".",
+                &[("exclude=[]", "exclude=[\"*.tmp\", \"*.bak\"]")],
+            ),
+        );
+        let no_color = copied("a.txt", ".", &[("color=true", "color=false")]);
+        ok(&["a.txt", "--no-color"], &no_color);
+        ok(&["a.txt", "--color=false"], &no_color);
+        ok(&["a.txt", "--color"], &copied("a.txt", ".", &[]));
+
+        let yes = copied("a.txt", ".", &[("links=None", "links=Some(true)")]);
+        let no = copied("a.txt", ".", &[("links=None", "links=Some(false)")]);
+        ok(&["a.txt", "--links"], &yes);
+        ok(&["a.txt", "--no-links"], &no);
+        ok(&["a.txt", "--links=false"], &no);
+        ok(&["a.txt"], &copied("a.txt", ".", &[]));
+        // `false` is not the value of `--links`: it is the `to` positional.
+        ok(
+            &["a.txt", "--links", "false"],
+            &copied("a.txt", "false", &[("links=None", "links=Some(true)")]),
+        );
+    }
+
+    #[test]
+    fn an_empty_rest_does_nothing() {
+        ok(&["remove"], "");
+    }
+
+    const COPY_HELP: &str = "\
+Copy a file.
+
+Usage:
+  > copy {flags} <from> (to)
+
+Subcommands:
+  copy remove, rm - Remove files.
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+  -f, --force: Overwrite the destination if it exists.
+  --dry-run: Show what would happen without doing it.
+  -j, --jobs <int>: Number of parallel jobs. (default: 4)
+  --retries <int>: Retry count (unset means never retry).
+  --color, --no-color: Coloured output; `--no-color` turns it off. (default: true)
+  -x, --exclude <string>: Skip files matching a pattern. (repeatable)
+  --links, --no-links: Follow symlinks (unset means use the default behaviour).
+
+Parameters:
+  from <path>: Source file.
+  to <path>: Destination; the current directory if omitted. (optional, default: '.')
+";
+
+    const REMOVE_HELP: &str = "\
+Remove files.
+
+Usage:
+  > copy remove {flags} ...(files)
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+  -r, --recursive: Descend into directories.
+  -f, --force: Ignore files that do not exist.
+
+Parameters:
+  ...files <path>: Files to remove.
+";
+
+    #[test]
+    fn golden_help() {
+        ok(&["--help"], COPY_HELP);
+        ok(&["remove", "--help"], REMOVE_HELP);
+        ok(&["rm", "--help"], REMOVE_HELP);
+    }
+
+    #[test]
+    fn help_beats_other_usage_errors() {
+        ok(&["--help", "--nope"], COPY_HELP);
+        ok(&["--nope", "-h"], COPY_HELP);
+    }
+}

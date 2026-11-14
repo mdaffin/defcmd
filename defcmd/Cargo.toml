@@ -19,8 +19,14 @@ path = "examples/errors.rs"
 name = "todo"
 path = "examples/nushell_style.rs"
 
+# And `copy` for `examples/flags_and_arguments.rs`.
+[[example]]
+name = "copy"
+path = "examples/flags_and_arguments.rs"
+
 [lints.clippy]
 # `examples/errors.rs` is a verbatim copy of the documented example, which is not edited.
 doc_overindented_list_items = "allow"
+doc_lazy_continuation = "allow"
 # A command's signature is its CLI, so commands (and `examples/flags_and_arguments.rs`) can have many.
 too_many_arguments = "allow"
