@@ -1,9 +1,11 @@
 // Lets generated code and in-crate tests refer to this crate as `::defcmd`.
 extern crate self as defcmd;
 
+mod spec;
 mod value;
 
 pub use defcmd_macros::command;
+pub use spec::{CommandSpec, ParamKind, ParamSpec};
 pub use value::{ArgError, FromArg};
 
 /// Items used by generated code. Not part of the public API.
