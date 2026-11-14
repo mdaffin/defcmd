@@ -63,6 +63,23 @@ pub(crate) fn run_registrations(
     }
 }
 
+/// `args` with the program name replaced by `bin_name` when there is one (the `CARGO_BIN_NAME`
+/// of the crate that has the root command), so help shows the Cargo target's name.
+pub(crate) fn apply_bin_name(mut args: Vec<OsString>, bin_name: Option<&str>) -> Vec<OsString> {
+    if let Some(name) = bin_name {
+        match args.first_mut() {
+            Some(argv0) => *argv0 = name.into(),
+            None => args.push(name.into()),
+        }
+    }
+    args
+}
+
+/// What the generated `fn main` calls.
+pub(crate) fn main_with_bin_name(bin_name: Option<&'static str>) -> ExitCode {
+    try_run(apply_bin_name(std::env::args_os().collect(), bin_name))
+}
+
 /// Like [`try_run`], but writes defcmd's own output (help, version, usage errors and the
 /// `Error:` line for a returned `Err`) to `out` and `err`.
 pub fn try_run_with<I, S>(args: I, out: &mut dyn Write, err: &mut dyn Write) -> ExitCode
@@ -255,5 +272,19 @@ mod tests {
         let code = try_run_with(["prog", "--version"], &mut out, &mut err);
         assert_eq!(code, ExitCode::SUCCESS);
         assert_eq!(String::from_utf8(out).unwrap(), "prog 9.9.9\n");
+    }
+
+    #[test]
+    fn bin_name_replaces_argv0() {
+        let args = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(
+            apply_bin_name(args(&["target/debug/x", "a"]), Some("tool")),
+            args(&["tool", "a"])
+        );
+        assert_eq!(
+            apply_bin_name(args(&["target/debug/x", "a"]), None),
+            args(&["target/debug/x", "a"])
+        );
+        assert_eq!(apply_bin_name(args(&[]), Some("tool")), args(&["tool"]));
     }
 }

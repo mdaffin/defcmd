@@ -21,6 +21,12 @@ pub use value::{ArgError, FromArg};
 #[doc(hidden)]
 pub mod __private {
     pub use inventory;
+
+    /// The body of the generated `fn main`. `bin_name` is `option_env!("CARGO_BIN_NAME")` of the
+    /// user's crate.
+    pub fn main(bin_name: Option<&'static str>) -> std::process::ExitCode {
+        crate::run::main_with_bin_name(bin_name)
+    }
 }
 
 #[cfg(test)]
