@@ -35,12 +35,13 @@ mod tests {
     use crate::command;
 
     #[command]
-    fn plumbing(x: u32) -> u32 {
-        x + 1
+    fn plumbing(x: String) -> Result<(), String> {
+        if x.is_empty() { Err(x) } else { Ok(()) }
     }
 
     #[test]
     fn command_attribute_leaves_function_callable() {
-        assert_eq!(plumbing(1), 2);
+        assert_eq!(plumbing("a".into()), Ok(()));
+        assert_eq!(plumbing(String::new()), Err(String::new()));
     }
 }

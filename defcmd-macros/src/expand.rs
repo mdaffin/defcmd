@@ -2,6 +2,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
+use syn::ext::IdentExt;
 use syn::{FnArg, ItemFn};
 
 use crate::model::{Command, Param, TypeKind};
@@ -59,15 +60,40 @@ fn convert(index: usize, p: &Param) -> TokenStream {
     }
 }
 
+/// The command name a bare `#[command]` gives a function: `_` shown as `-`, `r#` stripped.
+pub fn command_name(ident: &syn::Ident) -> String {
+    ident.unraw().to_string().replace('_', "-")
+}
+
 /// Expands the root command: `fn main` is renamed and the real entry point is emitted.
-pub fn expand_main(mut func: ItemFn) -> syn::Result<TokenStream> {
+pub fn expand_main(func: ItemFn) -> syn::Result<TokenStream> {
+    expand(func, true)
+}
+
+/// Expands a subcommand: the function keeps its name and signature and is registered under the
+/// name derived from it.
+pub fn expand_sub(func: ItemFn) -> syn::Result<TokenStream> {
+    expand(func, false)
+}
+
+fn expand(mut func: ItemFn, root: bool) -> syn::Result<TokenStream> {
     let command = Command::from_fn(&func)?;
     check_supported(&command)?;
 
     // The user's function keeps its body and signature, minus the parameter attributes that
     // only this macro understands (`#[flag]`, doc comments).
-    let inner = format_ident!("__defcmd_main");
-    func.sig.ident = inner.clone();
+    let inner = if root {
+        let inner = format_ident!("__defcmd_main");
+        func.sig.ident = inner.clone();
+        inner
+    } else {
+        func.sig.ident.clone()
+    };
+    let path: Vec<String> = if root {
+        Vec::new()
+    } else {
+        vec![command_name(&func.sig.ident)]
+    };
     for arg in &mut func.sig.inputs {
         if let FnArg::Typed(t) = arg {
             t.attrs.clear();
@@ -84,13 +110,22 @@ pub fn expand_main(mut func: ItemFn) -> syn::Result<TokenStream> {
         .map(|(i, p)| convert(i, p));
     let idents = command.params.iter().map(|p| &p.ident);
 
+    let entry = root.then(|| {
+        quote! {
+            #[allow(dead_code)]
+            fn main() -> ::std::process::ExitCode {
+                ::defcmd::__private::main(::core::option_env!("CARGO_BIN_NAME"))
+            }
+        }
+    });
+
     Ok(quote! {
         #func
 
         const _: () = {
             static __PARAMS: [::defcmd::ParamSpec; #count] = [#(#specs),*];
             static __SPEC: ::defcmd::CommandSpec = ::defcmd::CommandSpec {
-                path: &[],
+                path: &[#(#path),*],
                 aliases: &[],
                 doc: #doc,
                 params: &__PARAMS,
@@ -101,9 +136,12 @@ pub fn expand_main(mut func: ItemFn) -> syn::Result<TokenStream> {
                 __parsed: &::defcmd::Parsed,
                 __err: &mut dyn ::std::io::Write,
             ) -> ::core::result::Result<::std::process::ExitCode, ::defcmd::UsageError> {
+                // Taken before the parameters are bound, so a parameter named like the
+                // function cannot hide it.
+                let __command = #inner;
                 #(#converts)*
                 ::core::result::Result::Ok(::defcmd::Output::report(
-                    #inner(#(#idents),*),
+                    __command(#(#idents),*),
                     __err,
                 ))
             }
@@ -113,9 +151,19 @@ pub fn expand_main(mut func: ItemFn) -> syn::Result<TokenStream> {
             }
         };
 
-        #[allow(dead_code)]
-        fn main() -> ::std::process::ExitCode {
-            ::defcmd::__private::main(::core::option_env!("CARGO_BIN_NAME"))
-        }
+        #entry
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    #[test]
+    fn names_show_underscores_as_dashes_and_lose_raw_prefixes() {
+        assert_eq!(command_name(&parse_quote!(check)), "check");
+        assert_eq!(command_name(&parse_quote!(list_all)), "list-all");
+        assert_eq!(command_name(&parse_quote!(r#match)), "match");
+    }
 }
