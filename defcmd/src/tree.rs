@@ -1,13 +1,13 @@
 //! The command tree, built from the registered commands by their full paths.
 
 use std::ffi::OsStr;
+use std::sync::Mutex;
 
 use crate::spec::{CommandSpec, Registration};
 
 /// One command and the commands directly below it, sorted by name.
 pub(crate) struct Node<'a> {
-    /// The command's descriptor; for an implicit group a synthesized one, leaked so it is `'static`
-    /// like the rest (one small allocation per group per tree build).
+    /// The command's descriptor; for an implicit group a synthesized one (see `group_spec`).
     pub spec: &'static CommandSpec,
     /// The registration to run. `None` for an implicit group, which only prints its help.
     pub reg: Option<&'a Registration>,
@@ -17,6 +17,31 @@ pub(crate) struct Node<'a> {
 /// The last path segment: the word that selects `spec` below its parent.
 fn name_of(spec: &CommandSpec) -> &'static str {
     spec.path.last().copied().unwrap_or_default()
+}
+
+/// The descriptor of an implicit group. Leaked so it is `'static` like the rest, but only once
+/// per group: a later tree build (every `try_run` call) finds the earlier one.
+fn group_spec(
+    path: &'static [&'static str],
+    version: Option<&'static str>,
+) -> &'static CommandSpec {
+    static GROUPS: Mutex<Vec<&'static CommandSpec>> = Mutex::new(Vec::new());
+    let mut groups = GROUPS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(found) = groups
+        .iter()
+        .find(|g| g.path == path && g.version == version)
+    {
+        return found;
+    }
+    let spec: &'static CommandSpec = Box::leak(Box::new(CommandSpec {
+        path,
+        aliases: &[],
+        doc: "",
+        params: &[],
+        version,
+    }));
+    groups.push(spec);
+    spec
 }
 
 impl<'a> Node<'a> {
@@ -41,13 +66,7 @@ impl<'a> Node<'a> {
     ) -> Node<'a> {
         let spec: &'static CommandSpec = match reg {
             Some(r) => r.spec,
-            None => Box::leak(Box::new(CommandSpec {
-                path,
-                aliases: &[],
-                doc: "",
-                params: &[],
-                version,
-            })),
+            None => group_spec(path, version),
         };
         // The next path word of every command below this one, each with its own registration
         // if there is one (the first of them), else a longer command that implies the group.
@@ -199,6 +218,13 @@ mod tests {
         let tree = Node::build(&[&R_DEEP, &R_ROOT, &R_GET]).unwrap();
         assert_eq!(tree.children[0].spec.doc, "get");
         assert_eq!(tree.children.len(), 1);
+    }
+
+    #[test]
+    fn building_the_tree_again_reuses_the_spec_of_a_group() {
+        let first = Node::build(&[&R_ORPHAN, &R_ROOT]).unwrap();
+        let second = Node::build(&[&R_ORPHAN, &R_ROOT]).unwrap();
+        assert!(std::ptr::eq(first.children[0].spec, second.children[0].spec));
     }
 
     #[test]
