@@ -84,3 +84,13 @@ fn help_shows_the_full_path() {
         "{out}"
     );
 }
+
+#[test]
+fn the_root_help_lists_declared_nodes_with_their_docs() {
+    // `sync` is declared (it has a doc), so it is not an implicit group.
+    let (_, out, _) = run(&["app", "sync", "--help"]);
+    assert!(
+        out.starts_with("Sync things.\n\nUsage:\n  > app sync\n"),
+        "{out}"
+    );
+}

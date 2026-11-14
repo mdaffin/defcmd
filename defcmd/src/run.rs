@@ -46,7 +46,7 @@ pub(crate) fn run_registrations(
     let mut node = &tree;
     let mut rest: Vec<OsString> = args.get(1..).unwrap_or_default().to_vec();
     loop {
-        let spec = node.reg.spec;
+        let spec = node.spec;
         match parse(spec, &rest, &|word| node.child_index(word)) {
             Ok(Outcome::Help) => {
                 emit(out, &render_help(spec, &program, &node.descendants()));
@@ -60,7 +60,12 @@ pub(crate) fn run_registrations(
                 return ExitCode::SUCCESS;
             }
             Ok(Outcome::Run(parsed)) => {
-                return match (node.reg.run)(&parsed, err) {
+                let Some(reg) = node.reg else {
+                    // An implicit group has no body: show its help, but as a failure.
+                    emit(out, &render_help(spec, &program, &node.descendants()));
+                    return ExitCode::from(2);
+                };
+                return match (reg.run)(&parsed, err) {
                     Ok(code) => code,
                     Err(e) => usage_error(err, spec, &program, &e.to_string()),
                 };
@@ -502,5 +507,71 @@ mod dispatch_tests {
         let (code, _, err) = conf(&["conf", "get", "--version"]);
         assert_eq!(code, ExitCode::from(2));
         assert!(err.starts_with("Error: unknown flag '--version'"), "{err}");
+    }
+
+    static REMOTE_ADD: CommandSpec = CommandSpec {
+        path: &["remote", "add"],
+        aliases: &[],
+        doc: "Add a remote.",
+        params: &[],
+        version: None,
+    };
+    static R_REMOTE_ADD: Registration = Registration {
+        spec: &REMOTE_ADD,
+        run: glue_get,
+    };
+
+    fn grouped(args: &[&str]) -> (ExitCode, String, String) {
+        run(&[&R_ROOT, &R_REMOTE_ADD], args)
+    }
+
+    #[test]
+    fn a_group_alone_prints_its_help_to_stdout_and_fails_with_2() {
+        let (code, out, err) = grouped(&["conf", "remote"]);
+        assert_eq!(code, ExitCode::from(2));
+        let expected = "\
+Usage:
+  > conf remote
+
+Subcommands:
+  conf remote add - Add a remote.
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+";
+        assert_eq!(out, expected);
+        assert_eq!(err, "");
+    }
+
+    #[test]
+    fn a_group_with_help_exits_0_and_runs_its_children() {
+        let (code, out, _) = grouped(&["conf", "remote", "--help"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(out.starts_with("Usage:\n  > conf remote\n"), "{out}");
+        let (code, _, err) = grouped(&["conf", "remote", "add"]);
+        assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, ""));
+        assert!(ran("get:"));
+    }
+
+    #[test]
+    fn a_group_rejects_a_word_that_is_not_a_child() {
+        let (code, out, err) = grouped(&["conf", "remote", "nosuch"]);
+        assert_eq!(code, ExitCode::from(2));
+        assert_eq!(out, "");
+        assert!(
+            err.starts_with("Error: unexpected argument 'nosuch'\n"),
+            "{err}"
+        );
+        assert!(err.contains("Usage: conf remote."), "{err}");
+    }
+
+    #[test]
+    fn the_root_lists_group_children_flattened() {
+        let (_, out, _) = grouped(&["conf", "--help"]);
+        assert!(
+            out.contains("Subcommands:\n  conf remote\n  conf remote add - Add a remote.\n"),
+            "{out}"
+        );
     }
 }
