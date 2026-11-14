@@ -680,3 +680,164 @@ Parameters:
         ok(&["--nope", "-h"], COPY_HELP);
     }
 }
+
+mod fetch {
+    use super::run;
+
+    fn fetch(args: &[&str]) -> super::Run {
+        run("fetch", "fetch", args)
+    }
+
+    /// Runs `fetch` and checks the exit code and stdout of a success.
+    fn ok(args: &[&str], stdout: &str) {
+        let r = fetch(args);
+        assert_eq!(
+            (r.code, r.stdout.as_str(), r.stderr.as_str()),
+            (0, stdout, ""),
+            "{args:?}"
+        );
+    }
+
+    /// Runs `fetch` and checks that it is a usage error (exit 2) with this message.
+    fn bad(args: &[&str], message: &str) {
+        let r = fetch(args);
+        assert_eq!(r.code, 2, "{args:?}: {}", r.stderr);
+        assert_eq!(r.stdout, "", "{args:?}");
+        assert!(
+            r.stderr.starts_with(&format!("Error: {message}\n")),
+            "{args:?}: {}",
+            r.stderr
+        );
+    }
+
+    #[test]
+    fn defaults() {
+        ok(
+            &["https://example.com"],
+            "fetch https://example.com timeout=30s mode=Fast retries=3 workers=1 bind=None \
+             cache=None headers=[]\n",
+        );
+    }
+
+    #[test]
+    fn durations_integers_and_enums() {
+        ok(
+            &[
+                "https://example.com",
+                "--timeout",
+                "1.5min",
+                "--retries",
+                "0x10",
+                "--mode",
+                "careful",
+            ],
+            "fetch https://example.com timeout=90s mode=Careful retries=16 workers=1 bind=None \
+             cache=None headers=[]\n",
+        );
+    }
+
+    #[test]
+    fn addresses_and_custom_types() {
+        ok(
+            &[
+                "https://example.com",
+                "--bind",
+                "127.0.0.1:8080",
+                "--cache",
+                "50%",
+            ],
+            "fetch https://example.com timeout=30s mode=Fast retries=3 workers=1 \
+             bind=Some(127.0.0.1:8080) cache=Some(Percent(50)) headers=[]\n",
+        );
+        ok(
+            &["https://example.com", "--cache", "7"],
+            "fetch https://example.com timeout=30s mode=Fast retries=3 workers=1 bind=None \
+             cache=Some(Percent(7)) headers=[]\n",
+        );
+    }
+
+    #[test]
+    fn repeated_headers_use_the_custom_parser() {
+        ok(
+            &[
+                "https://example.com",
+                "-H",
+                "Accept: */*",
+                "--header",
+                "X-Id: 7",
+            ],
+            "fetch https://example.com timeout=30s mode=Fast retries=3 workers=1 bind=None \
+             cache=None headers=[(\"Accept\", \"*/*\"), (\"X-Id\", \"7\")]\n",
+        );
+    }
+
+    #[test]
+    fn a_duration_needs_a_unit() {
+        bad(
+            &["https://example.com", "--timeout", "30"],
+            "invalid value '30' for '--timeout': expected duration, like 30sec or 250ms",
+        );
+    }
+
+    #[test]
+    fn a_bad_mode_lists_the_choices() {
+        bad(
+            &["https://example.com", "--mode", "slow"],
+            "invalid value 'slow' for '--mode': expected one of: fast, careful",
+        );
+    }
+
+    #[test]
+    fn zero_workers_is_rejected_by_non_zero() {
+        bad(
+            &["https://example.com", "--workers", "0"],
+            "invalid value '0' for '--workers': number would be zero for non-zero type",
+        );
+    }
+
+    #[test]
+    fn a_bad_header_reports_the_custom_message() {
+        bad(
+            &["https://example.com", "-H", "nocolon"],
+            "invalid value 'nocolon' for '--header': expected `Name: value`",
+        );
+    }
+
+    #[test]
+    fn a_user_type_reports_its_own_error() {
+        bad(
+            &["https://example.com", "--cache", "101"],
+            "invalid value '101' for '--cache': must be between 0 and 100",
+        );
+        bad(
+            &["https://example.com", "--bind", "nope"],
+            "invalid value 'nope' for '--bind': expected socket address, like 127.0.0.1:80",
+        );
+    }
+
+    const HELP: &str = "\
+Fetch a URL.
+
+Usage:
+  > fetch {flags} <url>
+
+Flags:
+  -h, --help: Display the help message for this command
+  -V, --version: Print the version
+  --timeout <duration>: Give up after this long. (default: 30sec)
+  --mode <fast|careful>: How hard to try. (default: 'fast')
+  --retries <int>: Retry count. (default: 3)
+  --workers <nonzero>: Number of workers (at least 1). (default: 1)
+  --bind <socketaddr>: Local address to bind.
+  --cache <percent>: How much of the response to cache.
+  -H, --header <value>: Extra request header (repeatable). (repeatable)
+
+Parameters:
+  url <string>: What to fetch.
+";
+
+    #[test]
+    fn golden_help() {
+        ok(&["--help"], HELP);
+    }
+}

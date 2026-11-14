@@ -24,6 +24,15 @@ path = "examples/nushell_style.rs"
 name = "copy"
 path = "examples/flags_and_arguments.rs"
 
+# And `fetch` for `examples/values.rs`.
+[[example]]
+name = "fetch"
+path = "examples/values.rs"
+
+[lints.rust]
+# `examples/values.rs` is verbatim: rustc ignores the derived `Debug` read of `Percent(u8)`.
+dead_code = "allow"
+
 [lints.clippy]
 # `examples/errors.rs` is a verbatim copy of the documented example, which is not edited.
 doc_overindented_list_items = "allow"
