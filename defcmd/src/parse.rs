@@ -456,9 +456,9 @@ impl Parsed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::ffi::OsStringExt;
     use crate::spec::ParamSpec;
     use crate::test_util::{flag, optional, positional, rest, switch, with_short};
+    use std::os::unix::ffi::OsStringExt;
 
     // from, to (positionals), force and dry_run (switches).
     static PARAMS: [ParamSpec; 4] = [

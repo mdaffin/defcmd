@@ -224,7 +224,10 @@ mod tests {
     fn building_the_tree_again_reuses_the_spec_of_a_group() {
         let first = Node::build(&[&R_ORPHAN, &R_ROOT]).unwrap();
         let second = Node::build(&[&R_ORPHAN, &R_ROOT]).unwrap();
-        assert!(std::ptr::eq(first.children[0].spec, second.children[0].spec));
+        assert!(std::ptr::eq(
+            first.children[0].spec,
+            second.children[0].spec
+        ));
     }
 
     #[test]
