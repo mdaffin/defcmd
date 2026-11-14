@@ -367,7 +367,7 @@ pub(crate) fn parse_with_globals(
     }
     // A global flag the command declares gets the value given anywhere on the way here.
     for (i, p) in spec.params.iter().enumerate().filter(|(_, p)| p.global) {
-        if let Some(g) = globals.iter().position(|g| g.global && g.long == p.long) {
+        if let Some(g) = globals.iter().position(|g| p.redeclares(g)) {
             raw[i] = store[g].clone();
         }
     }

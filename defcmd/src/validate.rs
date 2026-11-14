@@ -168,7 +168,7 @@ fn global_problems(regs: &[&Registration]) -> Vec<String> {
         for p in reg.spec.params.iter().filter(|p| p.long.is_some()) {
             let long = p.long.unwrap_or_default();
             if p.global {
-                match globals.iter().find(|g| g.long == p.long) {
+                match globals.iter().find(|g| p.redeclares(g)) {
                     None => problems.push(format!(
                         "flag '--{long}' of {shown} is marked global, but the root command has \
                          no global flag '--{long}'"

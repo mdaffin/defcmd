@@ -51,6 +51,12 @@ pub struct ParamSpec {
 }
 
 impl ParamSpec {
+    /// Whether this is a global flag of a command that repeats the global flag `root` of the root
+    /// command: both are global and have the same long name.
+    pub(crate) fn redeclares(&self, root: &ParamSpec) -> bool {
+        self.global && root.global && self.long == root.long
+    }
+
     /// The name used in error messages: `--long` for flags, the bare name for positionals.
     pub fn display_name(&self) -> String {
         match self.long {

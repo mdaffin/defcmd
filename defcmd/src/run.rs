@@ -30,7 +30,7 @@ fn inherited(root: &CommandSpec, spec: &CommandSpec) -> Vec<&'static ParamSpec> 
         return Vec::new();
     }
     (root.params.iter())
-        .filter(|g| g.global && !spec.params.iter().any(|p| p.global && p.long == g.long))
+        .filter(|g| g.global && !spec.params.iter().any(|p| p.redeclares(g)))
         .collect()
 }
 
