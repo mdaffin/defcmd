@@ -347,7 +347,7 @@ mod tests {
     }
 }
 
-/// Dispatch through a hand-built tree shaped like the `errors.rs` example.
+/// Dispatch through a hand-built tree shaped like the `error_handling.rs` example.
 #[cfg(test)]
 mod dispatch_tests {
     use super::*;

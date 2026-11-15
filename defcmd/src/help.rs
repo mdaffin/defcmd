@@ -655,7 +655,7 @@ Flags:
 
     #[test]
     fn usage_error_has_an_error_line_and_a_help_line() {
-        // From the `errors.rs` example docs.
+        // From the `error_handling.rs` example docs.
         static PARAMS: [ParamSpec; 2] = [positional("file"), positional("key")];
         static GET: CommandSpec = CommandSpec {
             path: &["get"],

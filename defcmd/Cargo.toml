@@ -19,7 +19,7 @@ inventory = "0.3"
 # `CARGO_BIN_NAME` names the program in help output, and the example's docs call it `conf`.
 [[example]]
 name = "conf"
-path = "examples/errors.rs"
+path = "examples/error_handling.rs"
 
 # Same for `todo`, the program name in `examples/nushell_style.rs`.
 [[example]]
@@ -51,7 +51,7 @@ path = "tests/fixtures/clashing.rs"
 dead_code = "allow"
 
 [lints.clippy]
-# `examples/errors.rs` is a verbatim copy of the documented example, which is not edited.
+# `examples/error_handling.rs` is a verbatim copy of the documented example, which is not edited.
 doc_overindented_list_items = "allow"
 doc_lazy_continuation = "allow"
 # A command's signature is its CLI, so commands (and `examples/flags_and_arguments.rs`) can have many.

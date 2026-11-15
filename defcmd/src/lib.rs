@@ -86,7 +86,7 @@
 //! | `values.rs` | value types, enums, `FromStr` types, custom parsers |
 //! | `nushell_style.rs` | a subcommand tree from names |
 //! | `global_flags.rs` | root flags that every command accepts |
-//! | `errors.rs` | return types, errors, exit codes |
+//! | `error_handling.rs` | return types, errors, exit codes |
 #![warn(missing_docs)]
 
 // Lets generated code and in-crate tests refer to this crate as `::defcmd`.
