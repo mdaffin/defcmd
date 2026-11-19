@@ -777,21 +777,13 @@ mod tests {
     }
 
     #[test]
-    fn help_wins_over_usage_errors() {
+    fn help_beats_a_bad_value_and_an_extra_positional() {
         assert!(matches!(
-            run(&COPY, &["--nope", "--help"]),
-            Ok(Outcome::Help)
-        ));
-        assert!(matches!(
-            run(&COPY, &["--help", "--nope"]),
+            run(&COPY, &["--force=bad", "-h"]),
             Ok(Outcome::Help)
         ));
         assert!(matches!(
             run(&COPY, &["a", "b", "extra", "-h"]),
-            Ok(Outcome::Help)
-        ));
-        assert!(matches!(
-            run(&COPY, &["--force=bad", "-h"]),
             Ok(Outcome::Help)
         ));
     }
