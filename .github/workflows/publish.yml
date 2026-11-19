@@ -1,0 +1,38 @@
+name: Publish
+
+# Publishing a crate version is irreversible and can't be undone. Keep it an
+# explicit, one-at-a-time action so accidental publishes are impossible.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Publish only committed files: no target/, no local scratch files.
+          fetch-depth: 0
+          sparse-checkout: |
+            Cargo.lock
+            Cargo.toml
+            defcmd
+            defcmd-macros
+          sparse-checkout-cone-mode: false
+
+      - name: Log in to crates.io
+        run: cargo login "$${{ secrets.CRATES_TOKEN }}"
+
+      # `defcmd` depends on `defcmd-macros` via a path dependency, which
+      # `cargo publish` rejects. Publish the macro crate first so the registry
+      # version satisfies the dependency when `defcmd` is published.
+      - name: Publish defcmd-macros
+        run: cargo publish --package defcmd-macros
+
+      - name: Publish defcmd
+        run: cargo publish --package defcmd
