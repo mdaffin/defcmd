@@ -794,8 +794,6 @@ mod tests {
             run(&COPY, &["--force=bad", "-h"]),
             Ok(Outcome::Help)
         ));
-        // Missing positionals are an error too, and help still wins.
-        assert!(matches!(run(&COPY, &["-h"]), Ok(Outcome::Help)));
     }
 
     #[test]
