@@ -1,6 +1,6 @@
 [package]
 name = "defcmd"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 description = "A command is a plain function marked #[command]; its signature is the CLI, modelled on nushell."
@@ -12,7 +12,7 @@ categories = ["command-line-interface"]
 rust-version = "1.85"
 
 [dependencies]
-defcmd-macros = { path = "../defcmd-macros", version = "0.1.0" }
+defcmd-macros = { path = "../defcmd-macros", version = "0.1.1" }
 inventory = "0.3"
 
 

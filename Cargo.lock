@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "defcmd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "defcmd-macros",
  "inventory",
@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "defcmd-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
