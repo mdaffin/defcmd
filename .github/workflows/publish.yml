@@ -41,6 +41,9 @@ jobs:
       # manual semver parsing is needed.
       - name: Release
         run: cargo release "${{ inputs.version || inputs.bump || 'minor' }}" --workspace --execute --no-confirm
+        env:
+          # Needed for the crates.io publish that --execute performs.
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
       - name: Get the tag cargo-release pushed
         id: tag
