@@ -4,35 +4,51 @@ name: Publish
 # explicit, one-at-a-time action so accidental publishes are impossible.
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Explicit next version to publish (e.g. 0.2.0). Empty = auto-bump from the last tag."
+        required: false
+      bump:
+        description: "Bump amount when `version` is left empty."
+        required: false
+        type: choice
+        options: [patch, minor, major]
+        default: minor
 
 permissions:
-  contents: read
+  contents: write   # create the GitHub release (tag is pushed by cargo-release)
 
 jobs:
   publish:
-    name: Publish to crates.io
+    name: Prepare & publish
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
-          # Publish only committed files: no target/, no local scratch files.
+          # cargo-release needs a clean tree + full history (to reach origin/main and read tags)
           fetch-depth: 0
-          sparse-checkout: |
-            Cargo.lock
-            Cargo.toml
-            defcmd
-            defcmd-macros
-          sparse-checkout-cone-mode: false
+          # main is protected: push through a writable deploy key that bypasses the ruleset
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
 
-      - name: Log in to crates.io
-        run: cargo login "$${{ secrets.CRATES_TOKEN }}"
+      - uses: dtolnay/rust-toolchain@stable
 
-      # `defcmd` depends on `defcmd-macros` via a path dependency, which
-      # `cargo publish` rejects. Publish the macro crate first so the registry
-      # version satisfies the dependency when `defcmd` is published.
-      - name: Publish defcmd-macros
-        run: cargo publish --package defcmd-macros
+      - name: Install cargo-release
+        run: cargo install --locked cargo-release
 
-      - name: Publish defcmd
-        run: cargo publish --package defcmd
+      # cargo-release takes the explicit version input *or* a bump level
+      # (patch/minor/major) and computes the next version from the last tag
+      # itself. With a v0.1.0 baseline tag a patch bump yields 0.1.1, so no
+      # manual semver parsing is needed.
+      - name: Release
+        run: cargo release "${{ inputs.version || inputs.bump || 'minor' }}" --workspace --execute
+
+      - name: Get the tag cargo-release pushed
+        id: tag
+        run: echo "tag=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release (after publish succeeds)
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          make_latest: true
