@@ -40,7 +40,7 @@ jobs:
       # itself. With a v0.1.0 baseline tag a patch bump yields 0.1.1, so no
       # manual semver parsing is needed.
       - name: Release
-        run: cargo release "${{ inputs.version || inputs.bump || 'minor' }}" --workspace --execute
+        run: cargo release "${{ inputs.version || inputs.bump || 'minor' }}" --workspace --execute --no-confirm
 
       - name: Get the tag cargo-release pushed
         id: tag
@@ -49,6 +49,6 @@ jobs:
       - name: Create GitHub release (after publish succeeds)
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: v${{ steps.tag.outputs.tag }}
+          tag_name: ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
           make_latest: true
