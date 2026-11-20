@@ -96,8 +96,14 @@ Parameters:
 
     #[test]
     fn version() {
+        // Read the expected version from the package rather than hardcoding it, so the test
+        // doesn't break on every version bump.
+        let version = env!("CARGO_PKG_VERSION");
         let r = hello(&["--version"]);
-        assert_eq!((r.code, r.stdout.as_str()), (0, "hello 0.1.0\n"));
+        assert_eq!(
+            (r.code, r.stdout.as_str()),
+            (0, format!("hello {version}\n").as_str())
+        );
     }
 
     #[test]
